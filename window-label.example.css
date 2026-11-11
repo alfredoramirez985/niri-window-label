@@ -4,7 +4,7 @@
  * Then run: niri-window-label restart
  */
 
-/* Pastilla flotante por defecto (título automático / carpeta de proyecto) */
+/* Default floating pill (automatic title / project folder) */
 .badge-box {
     background-color: rgba(18, 20, 32, 0.94);
     border: 2px solid rgba(122, 162, 247, 0.90);
@@ -12,27 +12,27 @@
     padding: 8px 20px;
 }
 
-/* Pastilla cuando la ventana tiene un nombre personalizado (Super + N) */
+/* Floating pill when the window has a custom name (Super + N) */
 .badge-box.custom-named {
     border-color: rgba(224, 175, 104, 0.98);
     background-color: rgba(24, 24, 38, 0.96);
 }
 
-/* Texto del título por defecto */
+/* Default title text */
 .title-label {
     color: #c0caf5;
     font-size: 16px;
     font-weight: 800;
 }
 
-/* Texto cuando tiene nombre personalizado */
+/* Title text when the window has a custom name */
 .title-label.custom-named {
     color: #e0af68;
     font-size: 18px;
     font-weight: 900;
 }
 
-/* Cuadro de diálogo para renombrar (Super + N) */
+/* Rename popup dialog (Super + N) */
 .rename-box {
     background-color: rgba(20, 22, 35, 0.97);
     border: 2px solid #e0af68;

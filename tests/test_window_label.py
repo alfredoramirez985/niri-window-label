@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Pruebas unitarias y de integración para niri-window-label.
-Ejecutar con: python3 -m unittest discover -s tests -v
+Unit and integration tests for niri-window-label.
+Run with: python3 -m unittest discover -s tests -v
 """
 
 import importlib.machinery
@@ -48,8 +48,8 @@ def make_win(
 
 class TestWindowLabelGeometryAndNaming(unittest.TestCase):
     def test_two_half_screen_windows_left_and_right(self):
-        """En un monitor 1920x1080 con dos ventanas de media pantalla (936px),
-        la columna 1 debe centrarse a la izquierda (~484px) y la columna 2 a la derecha (~1436px)."""
+        """On a 1920x1080 monitor with two half-screen windows (936px),
+        column 1 must center on the left (~484px) and column 2 on the right (~1436px)."""
         engine = nwl.LayoutStateEngine()
         w1 = make_win(1, col=1, width=936.0, ts_secs=100)
         w2 = make_win(2, col=2, width=936.0, ts_secs=101)
@@ -64,8 +64,8 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(ty2, 16.0)
 
     def test_three_columns_on_ultrawide_monitor(self):
-        """Simula un monitor Ultrawide 3440x1440 con 3 ventanas de 1/3 de ancho (1125px cada una).
-        Deben quedar centradas en el tercio izquierdo, tercio central y tercio derecho."""
+        """Simulate a 3440x1440 ultrawide monitor with 3 one-third width windows (1125px each).
+        They must center in the left third, middle third, and right third."""
         engine = nwl.LayoutStateEngine()
         w1 = make_win(10, col=1, width=1125.0, ts_secs=100)
         w2 = make_win(11, col=2, width=1125.0, ts_secs=101)
@@ -76,23 +76,23 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         cx2, _, _ = engine._compute_window_geometry_on_output(w2, 3440, 1440, update_viewport=False)
         cx3, _, _ = engine._compute_window_geometry_on_output(w3, 3440, 1440, update_viewport=False)
 
-        self.assertTrue(500 <= cx1 <= 650, f"Tercio izquierdo inesperado: {cx1}")
-        self.assertTrue(1650 <= cx2 <= 1790, f"Tercio central inesperado: {cx2}")
-        self.assertTrue(2790 <= cx3 <= 2930, f"Tercio derecho inesperado: {cx3}")
+        self.assertTrue(500 <= cx1 <= 650, f"Unexpected left third: {cx1}")
+        self.assertTrue(1650 <= cx2 <= 1790, f"Unexpected middle third: {cx2}")
+        self.assertTrue(2790 <= cx3 <= 2930, f"Unexpected right third: {cx3}")
 
     def test_move_column_from_right_to_left_updates_side(self):
-        """Reproduce el caso en el segundo monitor (1600x900) cuando una ventana en la mitad
-        derecha se mueve hacia la izquierda (forced_side='left')."""
+        """Reproduce moving a right-half window to the left half on a secondary monitor (1600x900)
+        via forced_side='left'."""
         engine = nwl.LayoutStateEngine()
         w_other = make_win(2, col=2, width=1600.0, ws_id=4, ts_secs=200)
         w_moved = make_win(40, col=3, width=776.0, ws_id=4, ts_secs=205)
         engine.windows = {2: w_other, 40: w_moved}
 
-        # Inicialmente en col 3 está en la mitad derecha (~1196px)
+        # Initially at col 3 on the right half (~1196px)
         cx_before, _, _ = engine._compute_window_geometry_on_output(w_moved, 1600, 900)
         self.assertGreater(cx_before, 800.0)
 
-        # Ahora el usuario mueve la ventana 40 a la izquierda (pasa a col 2 y la otra a col 3)
+        # Now the user moves window 40 to the left (becomes col 2 while the other becomes col 3)
         w_moved["layout"]["pos_in_scrolling_layout"] = [2, 1]
         w_other["layout"]["pos_in_scrolling_layout"] = [3, 1]
         engine.forced_side[40] = "left"
@@ -102,7 +102,7 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertAlmostEqual(cx_after, 404.0, delta=1.0)
 
     def test_vertically_stacked_windows_in_same_column(self):
-        """Dos ventanas apiladas en la misma columna (row 1 y row 2) deben tener distinto top_y."""
+        """Two windows stacked in the same column (row 1 and row 2) must have distinct top_y values."""
         engine = nwl.LayoutStateEngine()
         top_win = make_win(1, col=1, row=1, width=936.0, height=480.0)
         bot_win = make_win(2, col=1, row=2, width=936.0, height=480.0)
@@ -115,8 +115,8 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(ty2, 16.0 + 480.0 + 16.0)
 
     def test_fullscreen_detection(self):
-        """Una ventana en mosaico normal (1920x1026 por la barra superior) NO es fullscreen,
-        mientras que una 1920x1080 SÍ es fullscreen."""
+        """A normal tiled window (1920x1026 due to top bar) is NOT fullscreen,
+        whereas a 1920x1080 window IS fullscreen."""
         engine = nwl.LayoutStateEngine()
         tiled_win = make_win(1, col=1, width=1920.0, height=1026.0, win_size=[1920, 1026])
         full_win = make_win(2, col=2, width=1920.0, height=1080.0, win_size=[1920, 1080])
@@ -125,21 +125,21 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertTrue(engine._is_window_fullscreen(full_win, 1920, 1080))
 
     def test_smart_project_folder_and_custom_naming(self):
-        """Verifica prioridad de nombre personalizado y auto-nombrado por carpeta de proyecto."""
+        """Verify custom name priority and automatic project folder naming."""
         engine = nwl.LayoutStateEngine()
         w = make_win(10, col=1, title="npm start", app_id="kitty")
 
-        # 1. Sin nombre personalizado pero con carpeta de proyecto detectada ("VoiceApp")
+        # 1. Without a custom name, use the detected project directory ("VoiceApp")
         lbl, is_custom = engine._format_label_for_window(w, {}, project_override="VoiceApp")
         self.assertFalse(is_custom)
         self.assertEqual(lbl, "VoiceApp  •  npm start")
 
-        # 2. Si el título ya contiene el nombre del proyecto, no lo duplica
+        # 2. If the window title already contains the project name, do not duplicate it
         w_dup = make_win(11, col=1, title="VoiceApp — Dolphin", app_id="dolphin")
         lbl_dup, _ = engine._format_label_for_window(w_dup, {}, project_override="VoiceApp")
         self.assertEqual(lbl_dup, "VoiceApp — Dolphin")
 
-        # 3. Con nombre personalizado en window-names.json, usa el personalizado y activa is_custom
+        # 3. With a custom name in window-names.json, prefer the custom name and set is_custom=True
         lbl_custom, is_custom = engine._format_label_for_window(
             w, {"10": "Servidor Principal"}, project_override="VoiceApp"
         )
@@ -147,7 +147,7 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(lbl_custom, "Servidor Principal")
 
     def test_floating_window_coordinates(self):
-        """Verifica que las ventanas flotantes (ej. Picture-in-Picture) usen tile_pos_in_workspace_view."""
+        """Verify that floating windows (e.g. Picture-in-Picture) use tile_pos_in_workspace_view."""
         engine = nwl.LayoutStateEngine()
         float_win = make_win(99, col=1, width=480.0, height=270.0)
         float_win["is_floating"] = True
@@ -161,56 +161,56 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(cw, 480.0)
 
     def test_long_strip_10_mixed_columns_never_exceeds_monitor_bounds(self):
-        """Simula una cinta de 10 columnas mezclando tamaños completos (1888px) y mitades (936px),
-        recorriéndolas de principio a fin y de regreso."""
+        """Simulate a strip of 10 columns mixing full-width (1888px) and half-width (936px) windows,
+        traversing from start to end and back."""
         engine = nwl.LayoutStateEngine()
         widths = [1888.0, 936.0, 1888.0, 936.0, 936.0, 936.0, 1888.0, 936.0, 936.0, 1888.0]
         for idx, w_px in enumerate(widths, start=1):
             engine.windows[idx] = make_win(idx, col=idx, width=w_px, ts_secs=100 + idx)
 
-        # Recorrido de izquierda a derecha (1 -> 10) y de derecha a izquierda (10 -> 1)
+        # Traverse left-to-right (1 -> 10) and right-to-left (10 -> 1)
         sequence = list(range(1, 11)) + list(range(10, 0, -1))
         for wid in sequence:
             win = engine.windows[wid]
             cx, ty, _ = engine._compute_window_geometry_on_output(win, 1920, 1080, update_viewport=True)
             self.assertTrue(
                 0.0 < cx < 1920.0,
-                f"Columna {wid} quedó fuera de pantalla en el recorrido: center_x={cx}",
+                f"Column {wid} went off-screen during traversal: center_x={cx}",
             )
             self.assertEqual(ty, 16.0)
 
     def test_multi_monitor_workspace_isolation(self):
-        """Verifica que moverse en el Monitor 2 (workspace 4) no altere la vista del Monitor 1 (workspace 1)."""
+        """Verify that scrolling on Monitor 2 (workspace 4) does not alter Monitor 1 (workspace 1)."""
         engine = nwl.LayoutStateEngine()
-        # Monitor 1 (ws 1): dos mitades
+        # Monitor 1 (ws 1): two half-width windows
         m1_left = make_win(1, col=1, width=936.0, ws_id=1, ts_secs=100)
         m1_right = make_win(2, col=2, width=936.0, ws_id=1, ts_secs=101)
-        # Monitor 2 (ws 4): tres columnas
+        # Monitor 2 (ws 4): three columns
         m2_c1 = make_win(30, col=1, width=776.0, ws_id=4, ts_secs=100)
         m2_c2 = make_win(31, col=2, width=776.0, ws_id=4, ts_secs=101)
         m2_c3 = make_win(32, col=3, width=1568.0, ws_id=4, ts_secs=102)
         engine.windows = {1: m1_left, 2: m1_right, 30: m2_c1, 31: m2_c2, 32: m2_c3}
 
         cx_m1_before, _, _ = engine._compute_window_geometry_on_output(m1_right, 1920, 1080)
-        # Ahora navegamos intensamente en el Monitor 2
+        # Navigate extensively on Monitor 2
         engine._compute_window_geometry_on_output(m2_c3, 1600, 900)
         engine._compute_window_geometry_on_output(m2_c1, 1600, 900)
         engine._compute_window_geometry_on_output(m2_c2, 1600, 900)
 
-        # El Monitor 1 debe conservar exactamente su posición
+        # Monitor 1 must preserve its exact viewport position
         cx_m1_after, _, _ = engine._compute_window_geometry_on_output(
             m1_right, 1920, 1080, update_viewport=False
         )
         self.assertAlmostEqual(cx_m1_before, cx_m1_after, delta=0.1)
 
     def test_peek_mode_filters_only_visible_windows(self):
-        """Si hay 6 ventanas en un workspace pero solo 2 caben en pantalla, el filtro de Vistazo (Peek)
-        solo debe detectar como visibles esas 2 ventanas."""
+        """If 6 windows exist in a workspace but only 2 fit on screen, Peek mode filtering
+        must only classify those 2 windows as visible."""
         engine = nwl.LayoutStateEngine()
         for c in range(1, 7):
             engine.windows[c] = make_win(c, col=c, width=936.0, ws_id=1, ts_secs=100 + c)
 
-        # Enfocamos la columna 6 (por lo que en pantalla están visibles la columna 5 y la 6)
+        # Focus column 6 (so columns 5 and 6 are visible on screen)
         engine._compute_window_geometry_on_output(engine.windows[6], 1920, 1080, update_viewport=True)
 
         visible_ids = []
@@ -224,7 +224,7 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(visible_ids, [5, 6])
 
     def test_closed_windows_garbage_collection_and_truncation(self):
-        """Verifica que los títulos largos se recorten a 56 chars y se limpien IDs cerrados."""
+        """Verify that long titles are truncated to 56 chars and closed window IDs are pruned."""
         long_title = "A" * 120
         truncated = nwl.truncate_text(long_title, 56)
         self.assertEqual(len(truncated), 56)
@@ -236,16 +236,16 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(cleaned, {"1": "Activa", "3": "También Activa"})
 
     def test_custom_css_override_merging(self):
-        """Verifica que ~/.config/niri/window-label.css se combine sobre el CSS base."""
+        """Verify that ~/.config/niri/window-label.css is appended on top of the base stylesheet."""
         import tempfile
 
         base = b".badge-box { border-radius: 12px; }"
         with tempfile.TemporaryDirectory() as tmp:
             custom_file = Path(tmp) / "window-label.css"
-            # Si no existe, devuelve el CSS base intacto
+            # When custom file does not exist, return the base CSS unchanged
             self.assertEqual(nwl.build_stylesheet(base, custom_file), base)
 
-            # Si existe, concatena las reglas del usuario al final para sobrescribir
+            # When custom file exists, append user rules at the end so they override defaults
             custom_file.write_text(".badge-box { border-color: #ff007c; }", encoding="utf-8")
             merged = nwl.build_stylesheet(base, custom_file)
             self.assertIn(b"#ff007c", merged)

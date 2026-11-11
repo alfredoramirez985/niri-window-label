@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-niri-window-label: Identificador y renombrador visual de ventanas para Niri.
-Soporta múltiples monitores, centra el cartel sobre la ventana activa (incluso si
-ocupa media pantalla o está apilada) y permite asignar nombres personalizados.
+niri-window-label: Visual window identifier and custom renamer for the Niri compositor.
+Supports multiple monitors, centers the overlay pill on the active window (including
+half-width and vertically stacked tiles), and allows assigning custom names.
 """
 
 import itertools
@@ -22,7 +22,7 @@ PID_FILE = Path(f"/run/user/{os.getuid()}/niri-window-label.pid")
 
 
 def build_stylesheet(default_css: bytes, custom_path: Path | None = None) -> bytes:
-    """Combina el CSS base con el archivo opcional ~/.config/niri/window-label.css del usuario."""
+    """Merge the base stylesheet with the optional user stylesheet at ~/.config/niri/window-label.css."""
     target = custom_path if custom_path is not None else STYLE_FILE
     try:
         if target.exists():
@@ -70,7 +70,7 @@ def _read_child_pids(pid_str: str) -> list[str]:
 
 
 def _collect_process_tree_pids(root_pid: int | None, max_depth: int = 4) -> list[str]:
-    """Recorre el árbol de procesos hijos en /proc hasta max_depth niveles sin for anidados."""
+    """Traverse child process trees in /proc up to max_depth levels without nested loops."""
     if not root_pid:
         return []
     result: list[str] = []
@@ -93,7 +93,7 @@ def _read_pid_cwd(pid_str: str) -> str | None:
 
 
 def get_project_folder_name(pid: int | None) -> str | None:
-    """Detecta el nombre de la carpeta del proyecto actual (cwd) de los procesos hijos/nietos."""
+    """Detect the current project directory name (cwd) from child/grandchild processes."""
     if not pid:
         return None
     home = str(Path.home())
@@ -106,8 +106,8 @@ def get_project_folder_name(pid: int | None) -> str | None:
 
 
 def set_terminal_pty_title(pid: int | None, target_title: str) -> bool:
-    """Si la ventana es cualquier terminal de Linux (kitty, Alacritty, foot, Ghostty, WezTerm, etc.),
-    envía la secuencia estándar OSC 2 a su /dev/pts/* para actualizar el título en Wayland y Alt+Tab."""
+    """If the window belongs to a Linux terminal emulator (kitty, Alacritty, foot, Ghostty, WezTerm, etc.),
+    send the standard OSC 2 escape sequence to its /dev/pts/* device to update its Wayland/Alt+Tab title."""
     if not pid:
         return False
     candidates = itertools.product(_collect_process_tree_pids(pid), ("0", "1", "2"))
@@ -145,7 +145,7 @@ def get_process_cwd(pid: int | None) -> str | None:
 
 
 def _find_gdk_monitor_for_workspace(ws_id: int | None, gdk_module):
-    """Devuelve el Gdk.Monitor donde reside el workspace dado, o None."""
+    """Return the Gdk.Monitor hosting the given workspace ID, or None if not found."""
     if ws_id is None:
         return None
     try:
@@ -239,7 +239,7 @@ def show_gtk_rename_dialog(
     GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
     GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.EXCLUSIVE)
 
-    # Detectar en qué monitor está la ventana enfocada para abrir el diálogo ahí mismo
+    # Detect which monitor hosts the focused window so the rename dialog opens on that same screen
     target_monitor = _find_gdk_monitor_for_workspace(ws_id, Gdk)
     if target_monitor:
         GtkLayerShell.set_monitor(win, target_monitor)
@@ -261,7 +261,7 @@ def show_gtk_rename_dialog(
 
     entry = Gtk.Entry()
     entry.get_style_context().add_class("rename-entry")
-    # Siempre inicia vacío para escribir el nuevo nombre desde cero sin concatenar
+    # Always start empty so typing replaces the window name instead of appending to it
     entry.set_text("")
     entry.set_placeholder_text("Escribe el nuevo nombre aquí...")
 
@@ -392,7 +392,7 @@ def cmd_switcher() -> int:
 
 
 class LayoutStateEngine:
-    """Motor puro de geometría, estado de columnas y formateo de etiquetas (testeable sin GTK)."""
+    """Pure geometry, scrolling-column state, and label-formatting engine (testable without GTK)."""
 
     GAP = 16.0
 
@@ -466,7 +466,7 @@ class LayoutStateEngine:
     def _compute_window_geometry_on_output(
         self, w: dict, mon_w: int, mon_h: int, update_viewport: bool = True
     ) -> tuple[float, float, float]:
-        """Calcula (center_x, top_y, win_w) de la ventana dentro de su monitor."""
+        """Compute (center_x, top_y, win_w) for the window relative to its output monitor."""
         layout = w.get("layout") or {}
         tile_size = layout.get("tile_size") or [float(mon_w), float(mon_h)]
         win_w = float(tile_size[0])
@@ -595,7 +595,7 @@ def run_daemon() -> None:
     )
 
     class MonitorBadgeWindow:
-        """Una ventana overlay independiente asignada a un monitor físico específico."""
+        """An independent layer-shell overlay window bound to a specific physical monitor."""
 
         def __init__(self, gdk_monitor: Gdk.Monitor):
             self.gdk_monitor = gdk_monitor
@@ -791,8 +791,7 @@ def run_daemon() -> None:
                     slot_idx += 1
 
         def peek_all_visible(self):
-            """Modo Vistazo: muestra simultáneamente el nombre sobre TODAS las ventanas
-            visibles en todos los monitores activos."""
+            """Peek mode: simultaneously display labels above all visible windows across active monitors."""
             if self.overview_open:
                 return
             names = load_custom_names()
