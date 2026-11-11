@@ -5,6 +5,7 @@ Soporta múltiples monitores, centra el cartel sobre la ventana activa (incluso 
 ocupa media pantalla o está apilada) y permite asignar nombres personalizados.
 """
 
+import itertools
 import json
 import os
 import signal
@@ -60,22 +61,22 @@ def notify_daemon(sig: int = signal.SIGUSR1) -> None:
             pass
 
 
+def _read_child_pids(pid_str: str) -> list[str]:
+    cpath = Path(f"/proc/{pid_str}/task/{pid_str}/children")
+    try:
+        return cpath.read_text().split() if cpath.exists() else []
+    except Exception:
+        return []
+
+
 def _collect_process_tree_pids(root_pid: int | None, max_depth: int = 4) -> list[str]:
-    """Recorre el árbol de procesos hijos en /proc hasta max_depth niveles."""
+    """Recorre el árbol de procesos hijos en /proc hasta max_depth niveles sin for anidados."""
     if not root_pid:
         return []
     result: list[str] = []
     current_level = [str(root_pid)]
     for _ in range(max_depth):
-        next_level: list[str] = []
-        for p in current_level:
-            try:
-                cpath = Path(f"/proc/{p}/task/{p}/children")
-                if cpath.exists():
-                    children = cpath.read_text().split()
-                    next_level.extend(children)
-            except Exception:
-                continue
+        next_level = list(itertools.chain.from_iterable(map(_read_child_pids, current_level)))
         if not next_level:
             break
         result.extend(next_level)
@@ -84,20 +85,23 @@ def _collect_process_tree_pids(root_pid: int | None, max_depth: int = 4) -> list
     return result
 
 
+def _read_pid_cwd(pid_str: str) -> str | None:
+    try:
+        return os.readlink(f"/proc/{pid_str}/cwd")
+    except Exception:
+        return None
+
+
 def get_project_folder_name(pid: int | None) -> str | None:
     """Detecta el nombre de la carpeta del proyecto actual (cwd) de los procesos hijos/nietos."""
     if not pid:
         return None
     home = str(Path.home())
-    # Revisamos primero los procesos más profundos (ej. subshell, nvim, bun, node)
     pids = _collect_process_tree_pids(pid)
     for p in reversed(pids[:-1]):
-        try:
-            cwd = os.readlink(f"/proc/{p}/cwd")
-            if cwd and cwd != home and cwd != "/":
-                return Path(cwd).name
-        except Exception:
-            continue
+        cwd = _read_pid_cwd(p)
+        if cwd and cwd not in (home, "/"):
+            return Path(cwd).name
     return None
 
 
@@ -106,55 +110,58 @@ def set_terminal_pty_title(pid: int | None, target_title: str) -> bool:
     envía la secuencia estándar OSC 2 a su /dev/pts/* para actualizar el título en Wayland y Alt+Tab."""
     if not pid:
         return False
-    for p in _collect_process_tree_pids(pid):
-        for fd in ("0", "1", "2"):
-            try:
-                target = os.readlink(f"/proc/{p}/fd/{fd}")
-                if target.startswith("/dev/pts/"):
-                    with open(target, "w", encoding="utf-8", errors="ignore") as f:
-                        f.write(f"\033]2;{target_title}\007")
-                    return True
-            except Exception:
-                continue
+    candidates = itertools.product(_collect_process_tree_pids(pid), ("0", "1", "2"))
+    for p, fd in candidates:
+        try:
+            target = os.readlink(f"/proc/{p}/fd/{fd}")
+            if target.startswith("/dev/pts/"):
+                with open(target, "w", encoding="utf-8", errors="ignore") as f:
+                    f.write(f"\033]2;{target_title}\007")
+                return True
+        except Exception:
+            continue
     return False
+
+
+def _abbreviate_home_path(path_str: str, home: str) -> str:
+    if path_str == home:
+        return "~"
+    if not path_str.startswith(home + "/"):
+        return path_str
+    rel = path_str[len(home) + 1 :]
+    parts = rel.split("/")
+    return "~/…/" + "/".join(parts[-2:]) if len(parts) > 2 else "~/" + rel
 
 
 def get_process_cwd(pid: int | None) -> str | None:
     if not pid:
         return None
     home = str(Path.home())
+    cwds = [c for c in map(_read_pid_cwd, _collect_process_tree_pids(pid, max_depth=2)) if c]
+    if not cwds:
+        return None
+    best_cwd = next((c for c in cwds if c != home), cwds[0])
+    return _abbreviate_home_path(best_cwd, home)
+
+
+def _find_gdk_monitor_for_workspace(ws_id: int | None, gdk_module):
+    """Devuelve el Gdk.Monitor donde reside el workspace dado, o None."""
+    if ws_id is None:
+        return None
     try:
-        children_path = Path(f"/proc/{pid}/task/{pid}/children")
-        pids_to_check = []
-        if children_path.exists():
-            pids_to_check.extend(children_path.read_text().split())
-        pids_to_check.append(str(pid))
-
-        best_cwd = None
-        for p in pids_to_check:
-            try:
-                cwd = os.readlink(f"/proc/{p}/cwd")
-                if cwd and cwd != home:
-                    best_cwd = cwd
-                    break
-                elif cwd and not best_cwd:
-                    best_cwd = cwd
-            except Exception:
-                continue
-
-        if best_cwd:
-            if best_cwd == home:
-                return "~"
-            if best_cwd.startswith(home + "/"):
-                rel = best_cwd[len(home) + 1 :]
-                parts = rel.split("/")
-                if len(parts) > 2:
-                    return "~/…/" + "/".join(parts[-2:])
-                return "~/" + rel
-            return best_cwd
+        wss = json.loads(subprocess.check_output(["niri", "msg", "--json", "workspaces"], text=True))
+        outs = json.loads(subprocess.check_output(["niri", "msg", "--json", "outputs"], text=True))
+        out_name = next((w.get("output") for w in wss if w.get("id") == ws_id), None)
+        if not out_name or out_name not in outs:
+            return None
+        ox = int((outs[out_name].get("logical") or {}).get("x", 0))
+        display = gdk_module.Display.get_default()
+        if not display:
+            return None
+        monitors = (display.get_monitor(i) for i in range(display.get_n_monitors()))
+        return next((m for m in monitors if abs(m.get_geometry().x - ox) < 50), None)
     except Exception:
-        pass
-    return None
+        return None
 
 
 def show_gtk_rename_dialog(
@@ -233,21 +240,9 @@ def show_gtk_rename_dialog(
     GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.EXCLUSIVE)
 
     # Detectar en qué monitor está la ventana enfocada para abrir el diálogo ahí mismo
-    try:
-        wss = json.loads(subprocess.check_output(["niri", "msg", "--json", "workspaces"], text=True))
-        outs = json.loads(subprocess.check_output(["niri", "msg", "--json", "outputs"], text=True))
-        out_name = next((w.get("output") for w in wss if w.get("id") == ws_id), None)
-        if out_name and out_name in outs:
-            ox = int((outs[out_name].get("logical") or {}).get("x", 0))
-            display = Gdk.Display.get_default()
-            if display:
-                for i in range(display.get_n_monitors()):
-                    m = display.get_monitor(i)
-                    if abs(m.get_geometry().x - ox) < 50:
-                        GtkLayerShell.set_monitor(win, m)
-                        break
-    except Exception:
-        pass
+    target_monitor = _find_gdk_monitor_for_workspace(ws_id, Gdk)
+    if target_monitor:
+        GtkLayerShell.set_monitor(win, target_monitor)
 
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     box.get_style_context().add_class("rename-box")
@@ -399,6 +394,8 @@ def cmd_switcher() -> int:
 class LayoutStateEngine:
     """Motor puro de geometría, estado de columnas y formateo de etiquetas (testeable sin GTK)."""
 
+    GAP = 16.0
+
     def __init__(self):
         self.windows: dict[int, dict] = {}
         self.workspaces: dict[int, dict] = {}
@@ -408,38 +405,37 @@ class LayoutStateEngine:
         self.focused_id: int | None = None
         self.overview_open: bool = False
 
-    def _compute_window_geometry_on_output(
-        self, w: dict, mon_w: int, mon_h: int, update_viewport: bool = True
-    ) -> tuple[float, float, float]:
-        """Calcula (center_x, top_y, win_w) de la ventana dentro de su monitor."""
-        layout = w.get("layout") or {}
-        tile_size = layout.get("tile_size") or [float(mon_w), float(mon_h)]
-        win_w, win_h = float(tile_size[0]), float(tile_size[1])
+    @staticmethod
+    def _focus_ts(win: dict) -> tuple[int, int]:
+        t = win.get("focus_timestamp") or {"secs": 0, "nanos": 0}
+        return (t.get("secs", 0), t.get("nanos", 0))
 
-        tile_pos = layout.get("tile_pos_in_workspace_view")
-        if tile_pos is not None:
-            return float(tile_pos[0]) + win_w / 2.0, float(tile_pos[1]), win_w
+    @staticmethod
+    def _clamp_viewport_x(
+        vx: float, cx: float, cw: float, usable_w: float, forced: str | None = None
+    ) -> float:
+        if cw >= usable_w - 8.0 or forced == "left":
+            return cx
+        if forced == "right":
+            return max(0.0, cx + cw - usable_w)
+        if cx < vx:
+            return cx
+        if cx + cw > vx + usable_w:
+            return cx + cw - usable_w
+        return vx
 
-        pos = layout.get("pos_in_scrolling_layout")
-        ws_id = w.get("workspace_id")
-        if not pos or ws_id is None:
-            return mon_w / 2.0, 16.0, win_w
-
-        target_col, target_row = int(pos[0]), int(pos[1])
-
-        ws_wins = [
+    def _get_tiled_workspace_windows(self, ws_id: int) -> list[dict]:
+        return [
             win
             for win in self.windows.values()
             if win.get("workspace_id") == ws_id
             and not win.get("is_floating")
             and (win.get("layout") or {}).get("pos_in_scrolling_layout")
         ]
-        if not ws_wins:
-            return mon_w / 2.0, 16.0, win_w
 
-        Gap = 16.0
-        usable_w = float(mon_w) - 2.0 * Gap
-
+    def _measure_columns(
+        self, ws_wins: list[dict], usable_w: float, mon_h: int
+    ) -> tuple[dict[int, float], dict[int, float], dict[int, dict[int, float]]]:
         cols_width: dict[int, float] = {}
         col_rows_height: dict[int, dict[int, float]] = {}
         for win in ws_wins:
@@ -451,58 +447,63 @@ class LayoutStateEngine:
 
         col_x: dict[int, float] = {}
         cur_x = 0.0
-        for c in sorted(cols_width.keys()):
+        for c in sorted(cols_width):
             col_x[c] = cur_x
-            cur_x += cols_width[c] + Gap
+            cur_x += cols_width[c] + self.GAP
+        return cols_width, col_x, col_rows_height
+
+    def _init_workspace_viewport(
+        self, ws_wins: list[dict], col_x: dict[int, float], cols_width: dict[int, float], usable_w: float
+    ) -> float:
+        recent_wins = sorted(ws_wins, key=self._focus_ts)[-4:]
+        first_col = recent_wins[0]["layout"]["pos_in_scrolling_layout"][0]
+        vx = col_x.get(first_col, 0.0)
+        for win in recent_wins:
+            c = win["layout"]["pos_in_scrolling_layout"][0]
+            vx = self._clamp_viewport_x(vx, col_x.get(c, 0.0), cols_width.get(c, usable_w), usable_w)
+        return vx
+
+    def _compute_window_geometry_on_output(
+        self, w: dict, mon_w: int, mon_h: int, update_viewport: bool = True
+    ) -> tuple[float, float, float]:
+        """Calcula (center_x, top_y, win_w) de la ventana dentro de su monitor."""
+        layout = w.get("layout") or {}
+        tile_size = layout.get("tile_size") or [float(mon_w), float(mon_h)]
+        win_w = float(tile_size[0])
+
+        tile_pos = layout.get("tile_pos_in_workspace_view")
+        if tile_pos is not None:
+            return float(tile_pos[0]) + win_w / 2.0, float(tile_pos[1]), win_w
+
+        pos = layout.get("pos_in_scrolling_layout")
+        ws_id = w.get("workspace_id")
+        if not pos or ws_id is None:
+            return mon_w / 2.0, self.GAP, win_w
+
+        ws_wins = self._get_tiled_workspace_windows(ws_id)
+        if not ws_wins:
+            return mon_w / 2.0, self.GAP, win_w
+
+        target_col, target_row = int(pos[0]), int(pos[1])
+        usable_w = float(mon_w) - 2.0 * self.GAP
+        cols_width, col_x, col_rows_height = self._measure_columns(ws_wins, usable_w, mon_h)
 
         if ws_id not in self.workspace_view_x:
-            def focus_ts(win):
-                t = win.get("focus_timestamp") or {"secs": 0, "nanos": 0}
-                return (t.get("secs", 0), t.get("nanos", 0))
-
-            recent_wins = sorted(ws_wins, key=focus_ts)[-4:]
-            first_col = recent_wins[0]["layout"]["pos_in_scrolling_layout"][0]
-            vx = col_x.get(first_col, 0.0)
-            for win in recent_wins:
-                c = win["layout"]["pos_in_scrolling_layout"][0]
-                cx = col_x.get(c, 0.0)
-                cw = cols_width.get(c, usable_w)
-                if cw >= usable_w - 8.0:
-                    vx = cx
-                elif cx < vx:
-                    vx = cx
-                elif cx + cw > vx + usable_w:
-                    vx = cx + cw - usable_w
-            self.workspace_view_x[ws_id] = vx
+            self.workspace_view_x[ws_id] = self._init_workspace_viewport(
+                ws_wins, col_x, cols_width, usable_w
+            )
 
         vx = self.workspace_view_x.get(ws_id, 0.0)
         cx = col_x.get(target_col, 0.0)
         cw = cols_width.get(target_col, win_w)
 
         if update_viewport:
-            forced = self.forced_side.get(w.get("id"))
-            if cw >= usable_w - 8.0:
-                vx = cx
-            elif forced == "left":
-                vx = cx
-            elif forced == "right":
-                vx = max(0.0, cx + cw - usable_w)
-            else:
-                if cx < vx:
-                    vx = cx
-                elif cx + cw > vx + usable_w:
-                    vx = cx + cw - usable_w
+            vx = self._clamp_viewport_x(vx, cx, cw, usable_w, self.forced_side.get(w.get("id")))
             self.workspace_view_x[ws_id] = vx
 
-        screen_x = Gap + (cx - vx)
-        center_x = screen_x + (cw / 2.0)
-
+        center_x = self.GAP + (cx - vx) + (cw / 2.0)
         rows_in_col = col_rows_height.get(target_col, {})
-        top_y = Gap
-        for r in sorted(rows_in_col.keys()):
-            if r < target_row:
-                top_y += rows_in_col[r] + Gap
-
+        top_y = self.GAP + sum(h + self.GAP for r, h in rows_in_col.items() if r < target_row)
         return center_x, top_y, cw
 
     def _format_label_for_window(
@@ -515,22 +516,37 @@ class LayoutStateEngine:
 
         raw_title = (w.get("title") or w.get("app_id") or "Sin título").strip()
         proj = project_override if project_override is not None else get_project_folder_name(w.get("pid"))
-        if proj:
-            if raw_title in ("~", "", w.get("app_id") or ""):
-                label = proj
-            elif proj.lower() not in raw_title.lower():
-                label = f"{proj}  •  {raw_title}"
-            else:
-                label = raw_title
-        else:
-            label = raw_title
-        return truncate_text(label, 56), False
+        if not proj or proj.lower() in raw_title.lower():
+            return truncate_text(raw_title, 56), False
+        if raw_title in ("~", "", w.get("app_id") or ""):
+            return truncate_text(proj, 56), False
+        return truncate_text(f"{proj}  •  {raw_title}", 56), False
 
     def _is_window_fullscreen(self, w: dict, mon_w: int, mon_h: int) -> bool:
         wsize = (w.get("layout") or {}).get("window_size")
-        if isinstance(wsize, list) and len(wsize) == 2:
-            return int(wsize[0]) >= mon_w and int(wsize[1]) >= mon_h
-        return False
+        return bool(
+            isinstance(wsize, list)
+            and len(wsize) == 2
+            and int(wsize[0]) >= mon_w
+            and int(wsize[1]) >= mon_h
+        )
+
+    def _apply_single_layout_change(self, wid: int, new_layout: dict) -> bool:
+        if wid not in self.windows:
+            return False
+        old_pos = (self.windows[wid].get("layout") or {}).get("pos_in_scrolling_layout")
+        new_pos = new_layout.get("pos_in_scrolling_layout")
+        self.windows[wid]["layout"] = new_layout
+        if wid != self.focused_id or not old_pos or not new_pos or new_pos[0] == old_pos[0]:
+            return False
+        self.forced_side[wid] = "left" if new_pos[0] < old_pos[0] else "right"
+        return True
+
+
+def _sync_window_pty_title(w: dict, names: dict[str, str]) -> None:
+    cname = names.get(str(w.get("id")))
+    if cname and w.get("title") != f"🏷️ {cname}":
+        set_terminal_pty_title(w.get("pid"), f"🏷️ {cname}")
 
 
 def run_daemon() -> None:
@@ -586,7 +602,7 @@ def run_daemon() -> None:
             self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
             self.win.get_style_context().add_class("niri-badge-window")
             self.win.set_decorated(False)
-            self.win.set_resizable(False)  # Fuerza a GTK a ajustar el tamaño al texto sin mostrar "..."
+            self.win.set_resizable(False)
             self.win.set_app_paintable(True)
 
             screen = self.win.get_screen()
@@ -598,7 +614,6 @@ def run_daemon() -> None:
             GtkLayerShell.set_namespace(self.win, "niri-window-label")
             GtkLayerShell.set_monitor(self.win, gdk_monitor)
             GtkLayerShell.set_layer(self.win, GtkLayerShell.Layer.OVERLAY)
-            # Anclamos arriba y a la izquierda para posicionar con precisión sobre cualquier ventana
             GtkLayerShell.set_anchor(self.win, GtkLayerShell.Edge.TOP, True)
             GtkLayerShell.set_anchor(self.win, GtkLayerShell.Edge.LEFT, True)
             GtkLayerShell.set_keyboard_mode(self.win, GtkLayerShell.KeyboardMode.NONE)
@@ -631,29 +646,22 @@ def run_daemon() -> None:
             mon_width: int,
             mon_height: int,
         ):
-            box_ctx = self.box.get_style_context()
-            title_ctx = self.title_lbl.get_style_context()
-            if is_custom:
-                box_ctx.add_class("custom-named")
-                title_ctx.add_class("custom-named")
-            else:
-                box_ctx.remove_class("custom-named")
-                title_ctx.remove_class("custom-named")
+            for ctx in (self.box.get_style_context(), self.title_lbl.get_style_context()):
+                if is_custom:
+                    ctx.add_class("custom-named")
+                else:
+                    ctx.remove_class("custom-named")
 
             self.title_lbl.set_text(title_text)
-
             self.box.show_all()
-            # Medimos el ancho real que ocupará la caja con el nuevo texto
+
             _min_w, nat_w = self.box.get_preferred_width()
             _min_h, nat_h = self.box.get_preferred_height()
             badge_w = max(nat_w, 80)
             badge_h = max(nat_h, 36)
 
-            left_margin = int(center_x - (badge_w / 2.0))
-            left_margin = max(16, min(mon_width - badge_w - 16, left_margin))
-
-            top_margin = int(top_y + 24)
-            top_margin = max(16, min(mon_height - badge_h - 16, top_margin))
+            left_margin = max(16, min(mon_width - badge_w - 16, int(center_x - (badge_w / 2.0))))
+            top_margin = max(16, min(mon_height - badge_h - 16, int(top_y + 24)))
 
             GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.LEFT, left_margin)
             GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.TOP, top_margin)
@@ -674,6 +682,9 @@ def run_daemon() -> None:
             self._refresh_outputs()
             self._init_gdk_monitors()
 
+        def _all_badge_windows(self):
+            return itertools.chain.from_iterable(self.monitor_pools.values())
+
         def _refresh_outputs(self):
             try:
                 out = subprocess.check_output(["niri", "msg", "--json", "outputs"], text=True)
@@ -690,7 +701,6 @@ def run_daemon() -> None:
                 geom = m.get_geometry()
                 key = (geom.x, geom.y)
                 if key not in self.monitor_pools:
-                    # Creamos hasta 4 slots por monitor para soportar el modo "Vistazo" (peek)
                     self.monitor_pools[key] = [MonitorBadgeWindow(m) for _ in range(4)]
 
         def _get_monitor_pool_for_output(
@@ -708,16 +718,23 @@ def run_daemon() -> None:
                 oh = int(logical.get("height", 1080))
                 if (ox, oy) in self.monitor_pools:
                     return self.monitor_pools[(ox, oy)], ow, oh
-                for (mx, my), pool in self.monitor_pools.items():
-                    if abs(mx - ox) < 50:
-                        return pool, ow, oh
+                matched = next(
+                    (pool for (mx, _), pool in self.monitor_pools.items() if abs(mx - ox) < 50),
+                    None,
+                )
+                if matched is not None:
+                    return matched, ow, oh
 
             if self.monitor_pools:
-                first_key = next(iter(self.monitor_pools))
-                pool = self.monitor_pools[first_key]
+                pool = next(iter(self.monitor_pools.values()))
                 geom = pool[0].gdk_monitor.get_geometry()
                 return pool, geom.width, geom.height
             return [], 1920, 1080
+
+        def _schedule_hide(self, timeout_ms: int) -> None:
+            if self.hide_timer_id is not None:
+                GLib.source_remove(self.hide_timer_id)
+            self.hide_timer_id = GLib.timeout_add(timeout_ms, self.hide_all)
 
         def show_for_window(self, wid: int | None, force: bool = False):
             if self.overview_open or wid is None or wid not in self.windows:
@@ -725,117 +742,150 @@ def run_daemon() -> None:
                 return
 
             w = self.windows[wid]
-            ws_id = w.get("workspace_id")
-            ws = self.workspaces.get(ws_id) or {}
-            output_name = ws.get("output")
-
-            pool, mon_w, mon_h = self._get_monitor_pool_for_output(output_name)
-            if not pool:
-                return
-
-            if not force and self._is_window_fullscreen(w, mon_w, mon_h):
+            ws = self.workspaces.get(w.get("workspace_id")) or {}
+            pool, mon_w, mon_h = self._get_monitor_pool_for_output(ws.get("output"))
+            if not pool or (not force and self._is_window_fullscreen(w, mon_w, mon_h)):
                 self.hide_all()
                 return
 
             target_mwin = pool[0]
-            for other_pool in self.monitor_pools.values():
-                for mwin in other_pool:
-                    if mwin is not target_mwin:
-                        mwin.hide()
+            for mwin in self._all_badge_windows():
+                if mwin is not target_mwin:
+                    mwin.hide()
 
             center_x, top_y, _cw = self._compute_window_geometry_on_output(
                 w, mon_w, mon_h, update_viewport=True
             )
-
             names = load_custom_names()
             title_text, is_custom = self._format_label_for_window(w, names)
 
-            open_ids = {str(k) for k in self.windows.keys()}
+            open_ids = {str(k) for k in self.windows}
             cleaned = {k: v for k, v in names.items() if k in open_ids}
             if len(cleaned) != len(names):
                 save_custom_names(cleaned)
 
-            target_mwin.show_badge(
-                title_text=title_text,
-                is_custom=is_custom,
-                center_x=center_x,
-                top_y=top_y,
-                mon_width=mon_w,
-                mon_height=mon_h,
-            )
+            target_mwin.show_badge(title_text, is_custom, center_x, top_y, mon_w, mon_h)
+            self._schedule_hide(2300)
 
-            if self.hide_timer_id is not None:
-                GLib.source_remove(self.hide_timer_id)
-            self.hide_timer_id = GLib.timeout_add(2300, self.hide_all)
+        def _peek_single_workspace(self, ws_id: int, ws: dict, names: dict[str, str]) -> None:
+            pool, mon_w, mon_h = self._get_monitor_pool_for_output(ws.get("output"))
+            if not pool:
+                return
+            active_wid = ws.get("active_window_id")
+            if active_wid and active_wid in self.windows:
+                self._compute_window_geometry_on_output(
+                    self.windows[active_wid], mon_w, mon_h, update_viewport=True
+                )
+
+            ws_wins = [win for win in self.windows.values() if win.get("workspace_id") == ws_id]
+            slot_idx = 0
+            for win in ws_wins:
+                if slot_idx >= len(pool):
+                    break
+                center_x, top_y, _ = self._compute_window_geometry_on_output(
+                    win, mon_w, mon_h, update_viewport=False
+                )
+                if 20.0 <= center_x <= (mon_w - 20.0):
+                    title_text, is_custom = self._format_label_for_window(win, names)
+                    pool[slot_idx].show_badge(title_text, is_custom, center_x, top_y, mon_w, mon_h)
+                    slot_idx += 1
 
         def peek_all_visible(self):
             """Modo Vistazo: muestra simultáneamente el nombre sobre TODAS las ventanas
             visibles en todos los monitores activos."""
             if self.overview_open:
                 return
-
             names = load_custom_names()
             self.hide_all()
-
             for ws_id, ws in self.workspaces.items():
-                if not ws.get("is_active"):
-                    continue
-                output_name = ws.get("output")
-                pool, mon_w, mon_h = self._get_monitor_pool_for_output(output_name)
-                if not pool:
-                    continue
-
-                # Asegurar que el viewport del workspace esté actualizado con su ventana activa
-                active_wid = ws.get("active_window_id")
-                if active_wid and active_wid in self.windows:
-                    self._compute_window_geometry_on_output(
-                        self.windows[active_wid], mon_w, mon_h, update_viewport=True
-                    )
-
-                ws_wins = [
-                    win for win in self.windows.values() if win.get("workspace_id") == ws_id
-                ]
-                slot_idx = 0
-                for win in ws_wins:
-                    if slot_idx >= len(pool):
-                        break
-                    center_x, top_y, cw = self._compute_window_geometry_on_output(
-                        win, mon_w, mon_h, update_viewport=False
-                    )
-                    # Verificar si el centro de la ventana está dentro de la pantalla visible
-                    if 20.0 <= center_x <= (mon_w - 20.0):
-                        title_text, is_custom = self._format_label_for_window(win, names)
-                        pool[slot_idx].show_badge(
-                            title_text=title_text,
-                            is_custom=is_custom,
-                            center_x=center_x,
-                            top_y=top_y,
-                            mon_width=mon_w,
-                            mon_height=mon_h,
-                        )
-                        slot_idx += 1
-
-            if self.hide_timer_id is not None:
-                GLib.source_remove(self.hide_timer_id)
-            self.hide_timer_id = GLib.timeout_add(2800, self.hide_all)
+                if ws.get("is_active"):
+                    self._peek_single_workspace(ws_id, ws, names)
+            self._schedule_hide(2800)
 
         def hide_all(self):
-            for pool in self.monitor_pools.values():
-                for mwin in pool:
-                    mwin.hide()
+            for mwin in self._all_badge_windows():
+                mwin.hide()
             self.hide_timer_id = None
             return False
 
     controller = BadgeController()
+    signal.signal(
+        signal.SIGUSR1, lambda *_: GLib.idle_add(controller.show_for_window, controller.focused_id, True)
+    )
+    signal.signal(signal.SIGUSR2, lambda *_: GLib.idle_add(controller.peek_all_visible))
 
-    def on_sigusr1(*_):
-        GLib.idle_add(controller.show_for_window, controller.focused_id, True)
+    initial_state = {"done": False}
 
-    def on_sigusr2(*_):
-        GLib.idle_add(controller.peek_all_visible)
+    def on_workspaces_changed(payload: dict) -> None:
+        ws_list = payload.get("workspaces", [])
+        controller.workspaces = {ws["id"]: ws for ws in ws_list}
 
-    signal.signal(signal.SIGUSR1, on_sigusr1)
-    signal.signal(signal.SIGUSR2, on_sigusr2)
+    def on_windows_changed(payload: dict) -> None:
+        w_list = payload.get("windows", [])
+        controller.windows = {w["id"]: w for w in w_list}
+        controller.workspace_view_x.clear()
+        names = load_custom_names()
+        for w in w_list:
+            if w.get("is_focused"):
+                controller.focused_id = w["id"]
+            _sync_window_pty_title(w, names)
+        if not initial_state["done"]:
+            initial_state["done"] = True
+            GLib.idle_add(controller.show_for_window, controller.focused_id)
+
+    def on_window_opened_or_changed(payload: dict) -> None:
+        w = payload.get("window", {})
+        wid = w.get("id")
+        if wid is None:
+            return
+        prev_focused = controller.focused_id
+        controller.windows[wid] = w
+        _sync_window_pty_title(w, load_custom_names())
+        if w.get("is_focused"):
+            w["focus_timestamp"] = {"secs": int(time.time()), "nanos": 0}
+            controller.focused_id = wid
+            if prev_focused != wid:
+                GLib.idle_add(controller.show_for_window, wid)
+
+    def on_window_layouts_changed(payload: dict) -> None:
+        changes = payload.get("changes", [])
+        valid_pairs = [item for item in changes if isinstance(item, list) and len(item) == 2]
+        moved = any(controller._apply_single_layout_change(wid, layout) for wid, layout in valid_pairs)
+        if moved and controller.focused_id is not None:
+            GLib.idle_add(controller.show_for_window, controller.focused_id)
+
+    def on_window_closed(payload: dict) -> None:
+        wid = payload.get("id")
+        controller.windows.pop(wid, None)
+        controller.forced_side.pop(wid, None)
+
+    def on_overview_changed(payload: dict) -> None:
+        is_open = bool(payload.get("is_open"))
+        controller.overview_open = is_open
+        if is_open:
+            GLib.idle_add(controller.hide_all)
+
+    def on_window_focus_changed(payload: dict) -> None:
+        wid = payload.get("id")
+        if wid != controller.focused_id:
+            controller.forced_side.clear()
+        controller.focused_id = wid
+        if wid in controller.windows:
+            controller.windows[wid]["focus_timestamp"] = {"secs": int(time.time()), "nanos": 0}
+            ws_id = controller.windows[wid].get("workspace_id")
+            if ws_id in controller.workspaces:
+                controller.workspaces[ws_id]["active_window_id"] = wid
+        GLib.idle_add(controller.show_for_window, wid)
+
+    event_handlers = {
+        "WorkspacesChanged": on_workspaces_changed,
+        "WindowsChanged": on_windows_changed,
+        "WindowOpenedOrChanged": on_window_opened_or_changed,
+        "WindowLayoutsChanged": on_window_layouts_changed,
+        "WindowClosed": on_window_closed,
+        "OverviewOpenedOrClosed": on_overview_changed,
+        "WindowFocusChanged": on_window_focus_changed,
+    }
 
     def event_reader():
         proc = subprocess.Popen(
@@ -844,7 +894,6 @@ def run_daemon() -> None:
             text=True,
             bufsize=1,
         )
-        initial_done = False
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -853,89 +902,10 @@ def run_daemon() -> None:
                 ev = json.loads(line)
             except Exception:
                 continue
-
-            if "WorkspacesChanged" in ev:
-                ws_list = ev["WorkspacesChanged"].get("workspaces", [])
-                controller.workspaces = {ws["id"]: ws for ws in ws_list}
-
-            elif "WindowsChanged" in ev:
-                w_list = ev["WindowsChanged"].get("windows", [])
-                controller.windows = {w["id"]: w for w in w_list}
-                controller.workspace_view_x.clear()
-                names = load_custom_names()
-                for w in w_list:
-                    if w.get("is_focused"):
-                        controller.focused_id = w["id"]
-                    cname = names.get(str(w["id"]))
-                    if cname and w.get("title") != f"🏷️ {cname}":
-                        set_terminal_pty_title(w.get("pid"), f"🏷️ {cname}")
-                if not initial_done:
-                    initial_done = True
-                    GLib.idle_add(controller.show_for_window, controller.focused_id)
-
-            elif "WindowOpenedOrChanged" in ev:
-                w = ev["WindowOpenedOrChanged"].get("window", {})
-                if "id" in w:
-                    wid = w["id"]
-                    prev_focused = controller.focused_id
-                    controller.windows[wid] = w
-                    names = load_custom_names()
-                    cname = names.get(str(wid))
-                    if cname and w.get("title") != f"🏷️ {cname}":
-                        set_terminal_pty_title(w.get("pid"), f"🏷️ {cname}")
-                    if w.get("is_focused"):
-                        w["focus_timestamp"] = {"secs": int(time.time()), "nanos": 0}
-                        controller.focused_id = wid
-                        if prev_focused != wid:
-                            GLib.idle_add(controller.show_for_window, wid)
-
-            elif "WindowLayoutsChanged" in ev:
-                changes = ev["WindowLayoutsChanged"].get("changes", [])
-                focused_moved = False
-                for item in changes:
-                    if isinstance(item, list) and len(item) == 2:
-                        wid, new_layout = item[0], item[1]
-                        if wid in controller.windows:
-                            old_pos = (
-                                controller.windows[wid].get("layout") or {}
-                            ).get("pos_in_scrolling_layout")
-                            new_pos = new_layout.get("pos_in_scrolling_layout")
-                            controller.windows[wid]["layout"] = new_layout
-                            if wid == controller.focused_id and old_pos and new_pos:
-                                if new_pos[0] < old_pos[0]:
-                                    controller.forced_side[wid] = "left"
-                                    focused_moved = True
-                                elif new_pos[0] > old_pos[0]:
-                                    controller.forced_side[wid] = "right"
-                                    focused_moved = True
-                if focused_moved and controller.focused_id is not None:
-                    GLib.idle_add(controller.show_for_window, controller.focused_id)
-
-            elif "WindowClosed" in ev:
-                wid = ev["WindowClosed"].get("id")
-                controller.windows.pop(wid, None)
-                controller.forced_side.pop(wid, None)
-
-            elif "OverviewOpenedOrClosed" in ev:
-                is_open = bool(ev["OverviewOpenedOrClosed"].get("is_open"))
-                controller.overview_open = is_open
-                if is_open:
-                    GLib.idle_add(controller.hide_all)
-
-            elif "WindowFocusChanged" in ev:
-                wid = ev["WindowFocusChanged"].get("id")
-                if wid != controller.focused_id:
-                    controller.forced_side.clear()
-                controller.focused_id = wid
-                if wid in controller.windows:
-                    controller.windows[wid]["focus_timestamp"] = {
-                        "secs": int(time.time()),
-                        "nanos": 0,
-                    }
-                    ws_id = controller.windows[wid].get("workspace_id")
-                    if ws_id in controller.workspaces:
-                        controller.workspaces[ws_id]["active_window_id"] = wid
-                GLib.idle_add(controller.show_for_window, wid)
+            for key, handler in event_handlers.items():
+                if key in ev:
+                    handler(ev[key])
+                    break
 
     t = threading.Thread(target=event_reader, daemon=True)
     t.start()
@@ -964,21 +934,19 @@ def cmd_restart() -> int:
 
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "daemon"
-    if cmd == "daemon":
-        run_daemon()
-    elif cmd == "restart":
-        sys.exit(cmd_restart())
-    elif cmd == "rename":
-        sys.exit(cmd_rename(sys.argv[2:]))
-    elif cmd == "switcher":
-        sys.exit(cmd_switcher())
-    elif cmd == "peek":
-        notify_daemon(signal.SIGUSR2)
-    elif cmd == "show":
-        notify_daemon(signal.SIGUSR1)
-    else:
+    commands = {
+        "daemon": lambda: run_daemon(),
+        "restart": lambda: sys.exit(cmd_restart()),
+        "rename": lambda: sys.exit(cmd_rename(sys.argv[2:])),
+        "switcher": lambda: sys.exit(cmd_switcher()),
+        "peek": lambda: notify_daemon(signal.SIGUSR2),
+        "show": lambda: notify_daemon(signal.SIGUSR1),
+    }
+    action = commands.get(cmd)
+    if not action:
         print("Uso: niri-window-label [daemon|restart|rename|switcher|peek|show]")
         sys.exit(1)
+    action()
 
 
 if __name__ == "__main__":
