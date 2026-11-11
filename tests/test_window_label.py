@@ -235,6 +235,22 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         cleaned = {k: v for k, v in names.items() if k in open_ids}
         self.assertEqual(cleaned, {"1": "Activa", "3": "También Activa"})
 
+    def test_custom_css_override_merging(self):
+        """Verifica que ~/.config/niri/window-label.css se combine sobre el CSS base."""
+        import tempfile
+
+        base = b".badge-box { border-radius: 12px; }"
+        with tempfile.TemporaryDirectory() as tmp:
+            custom_file = Path(tmp) / "window-label.css"
+            # Si no existe, devuelve el CSS base intacto
+            self.assertEqual(nwl.build_stylesheet(base, custom_file), base)
+
+            # Si existe, concatena las reglas del usuario al final para sobrescribir
+            custom_file.write_text(".badge-box { border-color: #ff007c; }", encoding="utf-8")
+            merged = nwl.build_stylesheet(base, custom_file)
+            self.assertIn(b"#ff007c", merged)
+            self.assertTrue(merged.startswith(base))
+
 
 if __name__ == "__main__":
     unittest.main()

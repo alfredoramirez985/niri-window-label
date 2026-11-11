@@ -16,7 +16,19 @@ from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".config" / "niri"
 NAMES_FILE = CONFIG_DIR / "window-names.json"
+STYLE_FILE = CONFIG_DIR / "window-label.css"
 PID_FILE = Path(f"/run/user/{os.getuid()}/niri-window-label.pid")
+
+
+def build_stylesheet(default_css: bytes, custom_path: Path | None = None) -> bytes:
+    """Combina el CSS base con el archivo opcional ~/.config/niri/window-label.css del usuario."""
+    target = custom_path if custom_path is not None else STYLE_FILE
+    try:
+        if target.exists():
+            return default_css + b"\n" + target.read_bytes()
+    except Exception:
+        pass
+    return default_css
 
 
 def truncate_text(text: str, max_len: int) -> str:
@@ -197,7 +209,7 @@ def show_gtk_rename_dialog(
     }
     """
     provider = Gtk.CssProvider()
-    provider.load_from_data(css)
+    provider.load_from_data(build_stylesheet(css))
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(),
         provider,
@@ -559,7 +571,7 @@ def run_daemon() -> None:
     }
     """
     style_provider = Gtk.CssProvider()
-    style_provider.load_from_data(css)
+    style_provider.load_from_data(build_stylesheet(css))
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(),
         style_provider,

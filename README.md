@@ -68,6 +68,17 @@ binds {
 
 ---
 
+## 🎨 Custom Styling (`~/.config/niri/window-label.css`)
+
+You can customize colors, borders, font size, and padding by copying [`window-label.example.css`](window-label.example.css) to `~/.config/niri/window-label.css` and restarting the daemon:
+
+```bash
+cp window-label.example.css ~/.config/niri/window-label.css
+niri-window-label restart
+```
+
+---
+
 ## 🛠️ CLI Usage
 
 ```bash
