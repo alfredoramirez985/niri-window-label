@@ -902,10 +902,10 @@ def run_daemon() -> None:
                 ev = json.loads(line)
             except Exception:
                 continue
-            for key, handler in event_handlers.items():
-                if key in ev:
-                    handler(ev[key])
-                    break
+            event_key, payload = next(iter(ev.items()), (None, None))
+            handler = event_handlers.get(event_key)
+            if handler:
+                handler(payload)
 
     t = threading.Thread(target=event_reader, daemon=True)
     t.start()
