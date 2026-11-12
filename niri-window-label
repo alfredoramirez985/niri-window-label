@@ -20,6 +20,56 @@ NAMES_FILE = CONFIG_DIR / "window-names.json"
 STYLE_FILE = CONFIG_DIR / "window-label.css"
 PID_FILE = Path(f"/run/user/{os.getuid()}/niri-window-label.pid")
 
+TRANSLATIONS: dict[str, dict[str, str]] = {
+    "en": {
+        "rename_header": "🏷️  Rename window [{app_id}]",
+        "rename_sub_custom": "Current: «{current}»  •  Original: {title}",
+        "rename_sub_orig": "Original title: {title}",
+        "rename_placeholder": "Type new window name here...",
+        "rename_hint": "Enter = save new name   •   Empty + Enter = restore original   •   Esc = cancel",
+        "err_focused_win": "Error getting focused window: {err}",
+        "no_focused_win": "No focused window found.",
+        "untitled": "Untitled",
+        "search_window": "🔎 Search window",
+        "restarted_msg": "✓ niri-window-label restarted in background.",
+        "usage": "Usage: niri-window-label [daemon|restart|rename|switcher|peek|show]",
+    },
+    "es": {
+        "rename_header": "🏷️  Renombrar ventana [{app_id}]",
+        "rename_sub_custom": "Actual: «{current}»  •  Original: {title}",
+        "rename_sub_orig": "Título original: {title}",
+        "rename_placeholder": "Escribe el nuevo nombre aquí...",
+        "rename_hint": "Enter = guardar nuevo nombre   •   Vacío + Enter = restaurar original   •   Esc = cancelar",
+        "err_focused_win": "Error obteniendo ventana enfocada: {err}",
+        "no_focused_win": "No hay ninguna ventana enfocada.",
+        "untitled": "Sin título",
+        "search_window": "🔎 Buscar ventana",
+        "restarted_msg": "✓ niri-window-label reiniciado en segundo plano.",
+        "usage": "Uso: niri-window-label [daemon|restart|rename|switcher|peek|show]",
+    },
+}
+
+
+def detect_language(env: dict[str, str] | None = None) -> str:
+    """Detect active UI language code ('es' or 'en') from environment variables."""
+    source = env if env is not None else os.environ
+    raw = (
+        source.get("NIRI_LABEL_LANG")
+        or source.get("LC_ALL")
+        or source.get("LC_MESSAGES")
+        or source.get("LANG")
+        or "en"
+    )
+    code = raw.split(".")[0].split("_")[0].lower()
+    return code if code in TRANSLATIONS else "en"
+
+
+def tr(key: str, lang: str | None = None, **kwargs) -> str:
+    """Translate a UI message key into the active or specified language with English fallback."""
+    active_lang = lang if lang in TRANSLATIONS else detect_language()
+    template = TRANSLATIONS.get(active_lang, {}).get(key) or TRANSLATIONS["en"].get(key, key)
+    return template.format(**kwargs) if kwargs else template
+
 
 def build_stylesheet(default_css: bytes, custom_path: Path | None = None) -> bytes:
     """Merge the base stylesheet with the optional user stylesheet at ~/.config/niri/window-label.css."""
@@ -247,14 +297,14 @@ def show_gtk_rename_dialog(
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
     box.get_style_context().add_class("rename-box")
 
-    hdr = Gtk.Label(label=f"🏷️  Rename window [{app_id}]")
+    hdr = Gtk.Label(label=tr("rename_header", app_id=app_id))
     hdr.get_style_context().add_class("rename-header")
     hdr.set_xalign(0.0)
 
     if current_name:
-        sub_txt = f"Current: «{current_name}»  •  Original: {truncate_text(title, 38)}"
+        sub_txt = tr("rename_sub_custom", current=current_name, title=truncate_text(title, 38))
     else:
-        sub_txt = f"Original title: {truncate_text(title, 48)}"
+        sub_txt = tr("rename_sub_orig", title=truncate_text(title, 48))
     sub = Gtk.Label(label=sub_txt)
     sub.get_style_context().add_class("rename-sub")
     sub.set_xalign(0.0)
@@ -263,11 +313,9 @@ def show_gtk_rename_dialog(
     entry.get_style_context().add_class("rename-entry")
     # Always start empty so typing replaces the window name instead of appending to it
     entry.set_text("")
-    entry.set_placeholder_text("Type new window name here...")
+    entry.set_placeholder_text(tr("rename_placeholder"))
 
-    hint = Gtk.Label(
-        label="Enter = save new name   •   Empty + Enter = restore original   •   Esc = cancel"
-    )
+    hint = Gtk.Label(label=tr("rename_hint"))
     hint.get_style_context().add_class("rename-hint")
     hint.set_xalign(0.0)
 
@@ -303,16 +351,16 @@ def cmd_rename(args: list[str]) -> int:
         out = subprocess.check_output(["niri", "msg", "--json", "focused-window"], text=True)
         win = json.loads(out)
     except Exception as e:
-        print(f"Error getting focused window: {e}", file=sys.stderr)
+        print(tr("err_focused_win", err=e), file=sys.stderr)
         return 1
 
     if not win or "id" not in win:
-        subprocess.run(["notify-send", "Niri", "No focused window found."])
+        subprocess.run(["notify-send", "Niri", tr("no_focused_win")])
         return 1
 
     wid = str(win["id"])
     app_id = win.get("app_id") or "app"
-    title = win.get("title") or "Untitled"
+    title = win.get("title") or tr("untitled")
     ws_id = win.get("workspace_id")
     names = load_custom_names()
     current_name = names.get(wid, "")
@@ -376,7 +424,7 @@ def cmd_switcher() -> int:
         return 0
 
     proc = subprocess.run(
-        ["rofi", "-dmenu", "-i", "-p", "🔎 Search window"],
+        ["rofi", "-dmenu", "-i", "-p", tr("search_window")],
         input="\n".join(entries),
         text=True,
         capture_output=True,
@@ -514,7 +562,7 @@ class LayoutStateEngine:
         if custom_name:
             return truncate_text(custom_name, 56), True
 
-        raw_title = (w.get("title") or w.get("app_id") or "Untitled").strip()
+        raw_title = (w.get("title") or w.get("app_id") or tr("untitled")).strip()
         proj = project_override if project_override is not None else get_project_folder_name(w.get("pid"))
         if not proj or proj.lower() in raw_title.lower():
             return truncate_text(raw_title, 56), False
@@ -927,7 +975,7 @@ def cmd_restart() -> int:
         ["niri", "msg", "action", "spawn", "--", str(Path(__file__).resolve()), "daemon"],
         check=False,
     )
-    print("✓ niri-window-label restarted in background.")
+    print(tr("restarted_msg"))
     return 0
 
 
@@ -943,7 +991,7 @@ def main():
     }
     action = commands.get(cmd)
     if not action:
-        print("Usage: niri-window-label [daemon|restart|rename|switcher|peek|show]")
+        print(tr("usage"))
         sys.exit(1)
     action()
 

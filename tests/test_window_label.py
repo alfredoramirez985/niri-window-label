@@ -251,6 +251,24 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
             self.assertIn(b"#ff007c", merged)
             self.assertTrue(merged.startswith(base))
 
+    def test_i18n_language_detection_and_translation(self):
+        """Verify automatic language detection from locale env vars and English fallback."""
+        self.assertEqual(nwl.detect_language({"LANG": "es_MX.UTF-8"}), "es")
+        self.assertEqual(nwl.detect_language({"LANG": "en_US.UTF-8"}), "en")
+        self.assertEqual(nwl.detect_language({"LANG": "fr_FR.UTF-8"}), "en")
+        self.assertEqual(
+            nwl.detect_language({"LANG": "en_US.UTF-8", "NIRI_LABEL_LANG": "es"}), "es"
+        )
+
+        self.assertEqual(
+            nwl.tr("rename_header", lang="en", app_id="kitty"), "🏷️  Rename window [kitty]"
+        )
+        self.assertEqual(
+            nwl.tr("rename_header", lang="es", app_id="kitty"), "🏷️  Renombrar ventana [kitty]"
+        )
+        self.assertEqual(nwl.tr("untitled", lang="en"), "Untitled")
+        self.assertEqual(nwl.tr("untitled", lang="es"), "Sin título")
+
 
 if __name__ == "__main__":
     unittest.main()
