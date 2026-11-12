@@ -597,6 +597,32 @@ def _sync_window_pty_title(w: dict, names: dict[str, str]) -> None:
         set_terminal_pty_title(w.get("pid"), f"🏷️ {cname}")
 
 
+def load_minimap_engine(custom_path: Path | None = None):
+    """Optionally connect to the companion niri-minimap tool if installed on the system."""
+    if os.environ.get("NIRI_DISABLE_MINIMAP") == "1":
+        return None
+    import importlib.machinery
+    import importlib.util
+
+    candidates = [
+        custom_path,
+        Path(os.environ["NIRI_MINIMAP_PATH"]) if "NIRI_MINIMAP_PATH" in os.environ else None,
+        Path(__file__).resolve().parent / "niri-minimap",
+        Path.home() / ".local" / "bin" / "niri-minimap",
+    ]
+    target = next((p for p in candidates if p is not None and p.exists()), None)
+    if not target:
+        return None
+    try:
+        loader = importlib.machinery.SourceFileLoader("niri_minimap_plugin", str(target))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod.MinimapEngine()
+    except Exception:
+        return None
+
+
 def run_daemon() -> None:
     import cairo
     import gi
@@ -632,6 +658,11 @@ def run_daemon() -> None:
         color: #e0af68;
         font-size: 18px;
         font-weight: 900;
+    }
+    .minimap-strip {
+        font-size: 13px;
+        font-weight: 800;
+        margin-top: 3px;
     }
     """
     style_provider = Gtk.CssProvider()
@@ -673,7 +704,13 @@ def run_daemon() -> None:
             self.title_lbl.get_style_context().add_class("title-label")
             self.title_lbl.set_line_wrap(False)
 
+            self.minimap_lbl = Gtk.Label()
+            self.minimap_lbl.get_style_context().add_class("minimap-strip")
+            self.minimap_lbl.set_use_markup(True)
+            self.minimap_lbl.set_no_show_all(True)
+
             self.box.pack_start(self.title_lbl, False, False, 0)
+            self.box.pack_start(self.minimap_lbl, False, False, 0)
             self.win.add(self.box)
 
             self.win.connect("realize", self._make_click_through)
@@ -693,6 +730,7 @@ def run_daemon() -> None:
             top_y: float,
             mon_width: int,
             mon_height: int,
+            minimap_markup: str = "",
         ):
             for ctx in (self.box.get_style_context(), self.title_lbl.get_style_context()):
                 if is_custom:
@@ -701,6 +739,11 @@ def run_daemon() -> None:
                     ctx.remove_class("custom-named")
 
             self.title_lbl.set_text(title_text)
+            if minimap_markup:
+                self.minimap_lbl.set_markup(minimap_markup)
+                self.minimap_lbl.show()
+            else:
+                self.minimap_lbl.hide()
             self.box.show_all()
 
             _min_w, nat_w = self.box.get_preferred_width()
@@ -726,9 +769,24 @@ def run_daemon() -> None:
             super().__init__()
             self.hide_timer_id: int | None = None
             self.monitor_pools: dict[tuple[int, int], list[MonitorBadgeWindow]] = {}
+            self.minimap_engine = load_minimap_engine()
 
             self._refresh_outputs()
             self._init_gdk_monitors()
+
+        def _compute_minimap_markup(
+            self, w: dict, mon_w: int, mon_h: int, names: dict[str, str]
+        ) -> str:
+            if not self.minimap_engine:
+                return ""
+            self.minimap_engine.windows = self.windows
+            self.minimap_engine.workspaces = self.workspaces
+            self.minimap_engine.workspace_view_x = self.workspace_view_x
+            self.minimap_engine.forced_side = self.forced_side
+            cols = self.minimap_engine.compute_strip_state(
+                w, mon_w, mon_h, names, update_viewport=False
+            )
+            return self.minimap_engine.format_strip_markup(cols, min_columns=2)
 
         def _all_badge_windows(self):
             return itertools.chain.from_iterable(self.monitor_pools.values())
@@ -812,7 +870,10 @@ def run_daemon() -> None:
             if len(cleaned) != len(names):
                 save_custom_names(cleaned)
 
-            target_mwin.show_badge(title_text, is_custom, center_x, top_y, mon_w, mon_h)
+            minimap_markup = self._compute_minimap_markup(w, mon_w, mon_h, names)
+            target_mwin.show_badge(
+                title_text, is_custom, center_x, top_y, mon_w, mon_h, minimap_markup
+            )
             self._schedule_hide(2300)
 
         def _peek_single_workspace(self, ws_id: int, ws: dict, names: dict[str, str]) -> None:

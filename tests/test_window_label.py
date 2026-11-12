@@ -269,6 +269,19 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(nwl.tr("untitled", lang="en"), "Untitled")
         self.assertEqual(nwl.tr("untitled", lang="es"), "Sin título")
 
+    def test_minimap_companion_plugin_connection(self):
+        """Verify that niri-window-label can connect to niri-minimap when installed."""
+        minimap_script = Path("/home/alfus985/projects/niri-minimap/niri-minimap")
+        if minimap_script.exists():
+            plugin = nwl.load_minimap_engine(minimap_script)
+            self.assertIsNotNone(plugin)
+            w1 = make_win(1, col=1, width=936.0, ts_secs=100)
+            w2 = make_win(2, col=2, width=936.0, ts_secs=101)
+            plugin.windows = {1: w1, 2: w2}
+            cols = plugin.compute_strip_state(w2, 1920, 1080, custom_names={"1": "API"})
+            plain = plugin.format_strip_plain(cols)
+            self.assertEqual(plain, "◇  ▣   2/2")
+
 
 if __name__ == "__main__":
     unittest.main()
