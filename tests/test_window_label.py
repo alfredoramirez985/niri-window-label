@@ -141,10 +141,10 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
 
         # 3. With a custom name in window-names.json, prefer the custom name and set is_custom=True
         lbl_custom, is_custom = engine._format_label_for_window(
-            w, {"10": "Servidor Principal"}, project_override="VoiceApp"
+            w, {"10": "Main Server"}, project_override="VoiceApp"
         )
         self.assertTrue(is_custom)
-        self.assertEqual(lbl_custom, "Servidor Principal")
+        self.assertEqual(lbl_custom, "Main Server")
 
     def test_floating_window_coordinates(self):
         """Verify that floating windows (e.g. Picture-in-Picture) use tile_pos_in_workspace_view."""
@@ -230,10 +230,10 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         self.assertEqual(len(truncated), 56)
         self.assertTrue(truncated.endswith("…"))
 
-        names = {"1": "Activa", "2": "Cerrada", "3": "También Activa"}
+        names = {"1": "Active", "2": "Closed", "3": "Also Active"}
         open_ids = {"1", "3"}
         cleaned = {k: v for k, v in names.items() if k in open_ids}
-        self.assertEqual(cleaned, {"1": "Activa", "3": "También Activa"})
+        self.assertEqual(cleaned, {"1": "Active", "3": "Also Active"})
 
     def test_custom_css_override_merging(self):
         """Verify that ~/.config/niri/window-label.css is appended on top of the base stylesheet."""
