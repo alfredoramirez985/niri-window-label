@@ -660,9 +660,9 @@ def run_daemon() -> None:
         font-weight: 900;
     }
     .minimap-strip {
-        font-size: 13px;
+        font-size: 16px;
         font-weight: 800;
-        margin-top: 3px;
+        margin-top: 4px;
     }
     """
     style_provider = Gtk.CssProvider()
