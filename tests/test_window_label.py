@@ -243,13 +243,20 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             custom_file = Path(tmp) / "window-label.css"
             # When custom file does not exist, return the base CSS unchanged
-            self.assertEqual(nwl.build_stylesheet(base, custom_file), base)
+            no_theme = Path(tmp) / "missing.theme.css"
+            self.assertEqual(nwl.build_stylesheet(base, custom_file, no_theme), base)
 
             # When custom file exists, append user rules at the end so they override defaults
             custom_file.write_text(".badge-box { border-color: #ff007c; }", encoding="utf-8")
-            merged = nwl.build_stylesheet(base, custom_file)
+            merged = nwl.build_stylesheet(base, custom_file, no_theme)
             self.assertIn(b"#ff007c", merged)
             self.assertTrue(merged.startswith(base))
+
+            # Theme file goes between the defaults and the user's file
+            theme_file = Path(tmp) / "window-label.theme.css"
+            theme_file.write_text("@define-color nwl_accent #123456;", encoding="utf-8")
+            layered = nwl.build_stylesheet(base, custom_file, theme_file)
+            self.assertLess(layered.index(b"#123456"), layered.index(b"#ff007c"))
 
     def test_i18n_language_detection_and_translation(self):
         """Verify automatic language detection from locale env vars and English fallback."""
@@ -313,6 +320,59 @@ class TestAltTabOrder(unittest.TestCase):
         ts = nwl.monotonic_timestamp()
         self.assertLess(ts["nanos"], 1_000_000_000)
         self.assertGreaterEqual(ts["secs"], 0)
+
+
+class TestMonitorMap(unittest.TestCase):
+    OUTPUTS = {
+        "VGA-1": {"make": "HP Inc.", "model": "HP P204", "logical": {"x": 1920, "y": 0, "width": 1600, "height": 900}},
+        "LVDS-1": {"make": "Seiko Epson Corporation", "model": "0x314C", "logical": {"x": 0, "y": 0, "width": 1920, "height": 1080}},
+    }
+
+    def test_numbered_left_to_right(self):
+        self.assertEqual(nwl.ordered_output_names(self.OUTPUTS), ["LVDS-1", "VGA-1"])
+
+    def test_friendly_names(self):
+        self.assertEqual(nwl.monitor_display_name("LVDS-1", self.OUTPUTS["LVDS-1"]), nwl.tr("alttab_laptop"))
+        self.assertEqual(nwl.monitor_display_name("VGA-1", self.OUTPUTS["VGA-1"]), "HP P204")
+        self.assertEqual(nwl.monitor_display_name("VGA-1", self.OUTPUTS["VGA-1"], {"VGA-1": "Lateral"}), "Lateral")
+        self.assertEqual(nwl.monitor_display_name("DP-2", {"make": "Dell", "model": "0xA0B1"}), "Dell")
+
+    def test_badges(self):
+        self.assertEqual(nwl.monitor_badge(0), "①")
+        self.assertEqual(nwl.monitor_badge(1), "②")
+        self.assertEqual(nwl.monitor_badge(12), "13")
+
+
+class TestStylesheet(unittest.TestCase):
+    def setUp(self):
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+        except (ImportError, ValueError):
+            self.skipTest("GTK3 not available")
+        self.Gtk = Gtk
+
+    def _color_of(self, css: bytes, css_class: str) -> str:
+        Gtk = self.Gtk
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        label = Gtk.Label()  # keep a reference: a freed widget's context loses its styles
+        ctx = label.get_style_context()
+        ctx.add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        ctx.add_class(css_class)
+        return ctx.get_color(Gtk.StateFlags.NORMAL).to_string()
+
+    def test_default_css_parses(self):
+        self.assertEqual(self._color_of(nwl.DEFAULT_CSS, "alttab-counter"), "rgb(125,207,255)")
+
+    def test_user_palette_override_wins(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".css", delete=False) as f:
+            f.write("@define-color nwl_focus #ff0000;\n")
+        css = nwl.build_stylesheet(nwl.DEFAULT_CSS, Path(f.name), Path("/nonexistent/theme.css"))
+        Path(f.name).unlink()
+        self.assertEqual(self._color_of(css, "alttab-counter"), "rgb(255,0,0)")
 
 
 if __name__ == "__main__":
