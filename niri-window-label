@@ -32,7 +32,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "untitled": "Untitled",
         "search_window": "🔎 Search window",
         "restarted_msg": "✓ niri-window-label restarted in background.",
-        "usage": "Usage: niri-window-label [daemon|restart|rename|switcher|peek|show]",
+        "usage": "Usage: niri-window-label [daemon|restart|rename|switcher|alt-tab [--reverse]|peek|show]",
+        "alttab_workspace": "Workspace {idx}",
+        "alttab_floating": "Floating window",
+        "alttab_hint": "Alt+Tab / Alt+Shift+Tab move  •  release Alt = switch  •  Esc = cancel",
     },
     "es": {
         "rename_header": "🏷️  Renombrar ventana [{app_id}]",
@@ -45,7 +48,10 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "untitled": "Sin título",
         "search_window": "🔎 Buscar ventana",
         "restarted_msg": "✓ niri-window-label reiniciado en segundo plano.",
-        "usage": "Uso: niri-window-label [daemon|restart|rename|switcher|peek|show]",
+        "usage": "Uso: niri-window-label [daemon|restart|rename|switcher|alt-tab [--reverse]|peek|show]",
+        "alttab_workspace": "Escritorio {idx}",
+        "alttab_floating": "Ventana flotante",
+        "alttab_hint": "Alt+Tab / Alt+Shift+Tab mover  •  soltar Alt = cambiar  •  Esc = cancelar",
     },
 }
 
@@ -110,6 +116,29 @@ def load_custom_names() -> dict[str, str]:
 def save_custom_names(names: dict[str, str]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     NAMES_FILE.write_text(json.dumps(names, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+SIG_ALTTAB_NEXT = signal.SIGRTMIN + 3
+SIG_ALTTAB_PREV = signal.SIGRTMIN + 4
+
+
+def monotonic_timestamp() -> dict[str, int]:
+    """Same clock niri uses for focus_timestamp (CLOCK_MONOTONIC), so MRU order stays consistent."""
+    ns = time.monotonic_ns()
+    return {"secs": ns // 1_000_000_000, "nanos": ns % 1_000_000_000}
+
+
+def mru_window_ids(windows: dict[int, dict], focused_id: int | None) -> list[int]:
+    """Most-recently-used order: focused window first, then by focus timestamp (newest first)."""
+    def key(w: dict) -> tuple[int, int]:
+        t = w.get("focus_timestamp") or {}
+        return (t.get("secs", 0), t.get("nanos", 0))
+
+    ordered = [w["id"] for w in sorted(windows.values(), key=key, reverse=True)]
+    if focused_id in windows:
+        ordered.remove(focused_id)
+        ordered.insert(0, focused_id)
+    return ordered
 
 
 def notify_daemon(sig: int = signal.SIGUSR1) -> None:
@@ -649,6 +678,12 @@ def run_daemon() -> None:
     gi.require_version("GtkLayerShell", "0.1")
     from gi.repository import Gdk, GLib, Gtk, GtkLayerShell
 
+    try:
+        gi.require_version("GioUnix", "2.0")
+        from gi.repository.GioUnix import DesktopAppInfo
+    except (ImportError, ValueError):
+        from gi.repository.Gio import DesktopAppInfo
+
     PID_FILE.write_text(str(os.getpid()))
 
     css = b"""
@@ -680,6 +715,79 @@ def run_daemon() -> None:
         font-size: 16px;
         font-weight: 800;
         margin-top: 4px;
+    }
+    window.niri-alttab-window {
+        background-color: transparent;
+    }
+    .alttab-box {
+        background-color: rgba(18, 20, 32, 0.96);
+        border: 2px solid rgba(122, 162, 247, 0.90);
+        border-radius: 16px;
+        padding: 16px 22px;
+        margin: 6px;
+    }
+    .alttab-header {
+        color: #7aa2f7;
+        font-size: 14px;
+        font-weight: 700;
+    }
+    .alttab-counter {
+        color: #7dcfff;
+        font-size: 14px;
+        font-weight: 800;
+    }
+    .alttab-strip {
+        padding: 10px 6px 4px 6px;
+    }
+    .alttab-col {
+        font-size: 30px;
+        color: #565f89;
+        padding: 0 6px;
+    }
+    .alttab-col.visible { color: #c0caf5; }
+    .alttab-col.custom { color: #e0af68; }
+    .alttab-col.focused {
+        color: #7dcfff;
+        font-weight: 900;
+        border-bottom: 3px solid #7dcfff;
+    }
+    .alttab-col.focused.custom {
+        color: #ff9e64;
+        border-bottom-color: #ff9e64;
+    }
+    .alttab-col.ellipsis { color: #565f89; font-size: 18px; }
+    .alttab-selected {
+        color: #c0caf5;
+        font-size: 20px;
+        font-weight: 900;
+        margin: 4px 0 12px 0;
+    }
+    .alttab-selected.custom-named { color: #e0af68; }
+    .alttab-row {
+        border-radius: 10px;
+        padding: 5px 10px;
+    }
+    .alttab-row.selected {
+        background-color: rgba(122, 162, 247, 0.22);
+        box-shadow: inset 3px 0 0 #7aa2f7;
+    }
+    .alttab-row-title {
+        color: #a9b1d6;
+        font-size: 14px;
+    }
+    .alttab-row.selected .alttab-row-title {
+        color: #ffffff;
+        font-weight: 800;
+    }
+    .alttab-row-title.custom-named { color: #e0af68; }
+    .alttab-row-meta {
+        color: #565f89;
+        font-size: 12px;
+    }
+    .alttab-hint {
+        color: #565f89;
+        font-size: 11px;
+        margin-top: 10px;
     }
     """
     style_provider = Gtk.CssProvider()
@@ -880,6 +988,8 @@ def run_daemon() -> None:
             self.hide_timer_id = GLib.timeout_add(timeout_ms, self.hide_all)
 
         def show_for_window(self, wid: int | None, force: bool = False):
+            if getattr(self, "alttab_active", lambda: False)():
+                return
             if self.overview_open or wid is None or wid not in self.windows:
                 self.hide_all()
                 return
@@ -956,7 +1066,348 @@ def run_daemon() -> None:
             self.hide_timer_id = None
             return False
 
+
+    class AltTabSwitcher:
+        """Custom Alt+Tab: a master strip of the selected window's workspace on top, MRU list below.
+        Niri keeps handling the Alt+Tab bind (each press signals us); we grab the keyboard only
+        to see Alt being released, Esc, Enter and arrow keys."""
+
+        MAX_ROWS = 9
+        MAX_STRIP_COLS = 15
+        LIFETIME_MS = 20000
+
+        def __init__(self, ctl: "BadgeController"):
+            self.ctl = ctl
+            self.win: Gtk.Window | None = None
+            self.order: list[int] = []
+            self.sel = 0
+            self.active = False
+            self.focused_in = False
+            self.seen_alt = False
+            self.opened_at = 0.0
+            self.poll_id: int | None = None
+            self.life_id: int | None = None
+
+        # ---------- lifecycle ----------
+        def step(self, delta: int) -> bool:
+            if self.active:
+                self._move(delta)
+            else:
+                self._open(delta)
+            return False
+
+        def _open(self, delta: int) -> None:
+            ctl = self.ctl
+            if ctl.overview_open:
+                return
+            self.order = mru_window_ids(ctl.windows, ctl.focused_id)
+            if not self.order:
+                return
+            self.sel = (1 if delta > 0 else -1) % len(self.order) if len(self.order) > 1 else 0
+            ctl.hide_all()
+
+            focused = ctl.windows.get(ctl.focused_id) or ctl.windows[self.order[0]]
+            ws = ctl.workspaces.get(focused.get("workspace_id")) or {}
+            pool, _mw, _mh = ctl._get_monitor_pool_for_output(ws.get("output"))
+            gdk_monitor = pool[0].gdk_monitor if pool else None
+
+            self._build(gdk_monitor)
+            self.active = True
+            self.focused_in = False
+            self.seen_alt = False
+            self.opened_at = time.monotonic()
+            self._render()
+            self.win.show_all()
+            self.poll_id = GLib.timeout_add(25, self._poll_alt)
+            self.life_id = GLib.timeout_add(self.LIFETIME_MS, self._cancel_timeout)
+
+        def _close(self) -> None:
+            self.active = False
+            for attr in ("poll_id", "life_id"):
+                tid = getattr(self, attr)
+                if tid is not None:
+                    GLib.source_remove(tid)
+                    setattr(self, attr, None)
+            if self.win is not None:
+                self.win.destroy()
+                self.win = None
+
+        def commit(self) -> None:
+            wid = self.order[self.sel] if self.order else None
+            self._close()
+            if wid is not None and wid in self.ctl.windows and wid != self.ctl.focused_id:
+                subprocess.Popen(["niri", "msg", "action", "focus-window", "--id", str(wid)])
+            else:
+                GLib.idle_add(self.ctl.show_for_window, self.ctl.focused_id, True)
+
+        def cancel(self) -> None:
+            self._close()
+
+        def _cancel_timeout(self) -> bool:
+            self.life_id = None
+            self.cancel()
+            return False
+
+        def _move(self, delta: int) -> None:
+            self.order = [wid for wid in self.order if wid in self.ctl.windows]
+            if not self.order:
+                self.cancel()
+                return
+            self.sel = (self.sel + delta) % len(self.order)
+            self._render()
+
+        def _alt_held(self) -> bool:
+            keymap = Gdk.Keymap.get_for_display(Gdk.Display.get_default())
+            return bool(keymap.get_modifier_state() & Gdk.ModifierType.MOD1_MASK)
+
+        def _debug(self, msg: str) -> None:
+            if os.environ.get("NIRI_ALTTAB_DEBUG") == "1":
+                print(f"[alttab {time.monotonic() - self.opened_at:6.3f}s] {msg}", file=sys.stderr, flush=True)
+
+        def _poll_alt(self) -> bool:
+            """Backup detector only. On Wayland GDK may not know about an Alt that was pressed
+            before we got keyboard focus, so 'not held' is only trusted after we saw it held."""
+            if not self.active:
+                self.poll_id = None
+                return False
+            held = self._alt_held()
+            if held and not self.seen_alt:
+                self._debug("poll: Alt held")
+                self.seen_alt = True
+            elif not held and self.seen_alt:
+                self._debug("poll: Alt released -> commit")
+                self.poll_id = None
+                self.commit()
+                return False
+            return True
+
+        # ---------- input ----------
+        def _on_focus_in(self, *_):
+            self.focused_in = True
+            self._debug(f"focus-in, poll sees Alt={self._alt_held()}")
+            # wl_keyboard.modifiers follows enter; give it a moment, then catch the quick
+            # Alt+Tab tap whose Alt release happened before we had the keyboard.
+            GLib.timeout_add(40, self._check_alt_after_focus)
+            return False
+
+        def _check_alt_after_focus(self) -> bool:
+            if self.active and not self.seen_alt and not self._alt_held():
+                self._debug("Alt already released before focus -> commit")
+                self.commit()
+            return False
+
+        def _on_key_press(self, _w, event) -> bool:
+            key = Gdk.keyval_name(event.keyval) or ""
+            self._debug(f"press {key} state={int(event.state)}")
+            if key == "Escape":
+                self.cancel()
+            elif key in ("Return", "KP_Enter", "space"):
+                self.commit()
+            elif key in ("Right", "Down", "Tab", "l", "j"):
+                self._move(1)
+            elif key in ("Left", "Up", "ISO_Left_Tab", "h", "k"):
+                self._move(-1)
+            return True
+
+        def _on_key_release(self, _w, event) -> bool:
+            key = Gdk.keyval_name(event.keyval) or ""
+            alt_in_state = bool(event.state & Gdk.ModifierType.MOD1_MASK)
+            self._debug(f"release {key} state={int(event.state)} alt={alt_in_state}")
+            if key in ("Alt_L", "Alt_R", "Meta_L", "Meta_R"):
+                self.commit()
+            elif key in ("Tab", "ISO_Left_Tab"):
+                # Tab's release reaches us with the live modifier state: tells us if Alt is still down.
+                if alt_in_state:
+                    self.seen_alt = True
+                else:
+                    self.commit()
+            return True
+
+        def _on_row_click(self, idx: int) -> None:
+            self.sel = idx
+            self.commit()
+
+        # ---------- drawing ----------
+        def _build(self, gdk_monitor) -> None:
+            win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+            win.get_style_context().add_class("niri-alttab-window")
+            win.set_decorated(False)
+            win.set_app_paintable(True)
+            visual = win.get_screen().get_rgba_visual()
+            if visual:
+                win.set_visual(visual)
+            GtkLayerShell.init_for_window(win)
+            GtkLayerShell.set_namespace(win, "niri-window-alttab")
+            GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+            GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+            if gdk_monitor is not None:
+                GtkLayerShell.set_monitor(win, gdk_monitor)
+            win.connect("key-press-event", self._on_key_press)
+            win.connect("key-release-event", self._on_key_release)
+            win.connect("focus-in-event", self._on_focus_in)
+
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            outer.get_style_context().add_class("alttab-box")
+
+            top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            self.header_lbl = Gtk.Label(xalign=0.0)
+            self.header_lbl.get_style_context().add_class("alttab-header")
+            self.counter_lbl = Gtk.Label(xalign=1.0)
+            self.counter_lbl.get_style_context().add_class("alttab-counter")
+            top.pack_start(self.header_lbl, True, True, 0)
+            top.pack_end(self.counter_lbl, False, False, 0)
+
+            self.strip_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+            self.strip_box.set_halign(Gtk.Align.CENTER)
+            self.strip_box.get_style_context().add_class("alttab-strip")
+
+            self.sel_lbl = Gtk.Label()
+            self.sel_lbl.get_style_context().add_class("alttab-selected")
+            self.sel_lbl.set_ellipsize(3)  # Pango.EllipsizeMode.END
+            self.sel_lbl.set_max_width_chars(60)
+
+            self.list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            hint = Gtk.Label(label=tr("alttab_hint"))
+            hint.get_style_context().add_class("alttab-hint")
+
+            outer.pack_start(top, False, False, 0)
+            outer.pack_start(self.strip_box, False, False, 0)
+            outer.pack_start(self.sel_lbl, False, False, 0)
+            outer.pack_start(Gtk.Separator(), False, False, 4)
+            outer.pack_start(self.list_box, False, False, 0)
+            outer.pack_start(hint, False, False, 0)
+            outer.set_size_request(560, -1)
+            win.add(outer)
+            self.win = win
+
+        @staticmethod
+        def _clear(box: Gtk.Box) -> None:
+            for child in box.get_children():
+                box.remove(child)
+                child.destroy()
+
+        def _strip_columns(self, w: dict) -> list[dict]:
+            """Columns of w's workspace as if w were focused (viewport simulated on a copy)."""
+            eng = self.ctl.minimap_engine
+            if not eng or w.get("is_floating"):
+                return []
+            ws = self.ctl.workspaces.get(w.get("workspace_id")) or {}
+            _pool, mon_w, mon_h = self.ctl._get_monitor_pool_for_output(ws.get("output"))
+            eng.windows = self.ctl.windows
+            eng.workspaces = self.ctl.workspaces
+            eng.workspace_view_x = dict(self.ctl.workspace_view_x)
+            eng.forced_side = {}
+            return eng.compute_strip_state(w, mon_w, mon_h, load_custom_names(), update_viewport=True)
+
+        def _render_strip(self, w: dict) -> None:
+            self._clear(self.strip_box)
+            cols = self._strip_columns(w)
+            if not cols:
+                self.counter_lbl.set_text("")
+                lbl = Gtk.Label(label="◆  " + tr("alttab_floating") if w.get("is_floating") else "▣")
+                lbl.get_style_context().add_class("alttab-col")
+                lbl.get_style_context().add_class("focused")
+                self.strip_box.pack_start(lbl, False, False, 0)
+                return
+            focus_idx = next((i for i, c in enumerate(cols) if c["is_focused"]), 0)
+            self.counter_lbl.set_text(f"{focus_idx + 1}/{len(cols)}")
+            # Slide a window over long strips so the selected column stays centered.
+            n = self.MAX_STRIP_COLS
+            start = max(0, min(len(cols) - n, focus_idx - n // 2)) if len(cols) > n else 0
+            shown = cols[start:start + n]
+            eng = self.ctl.minimap_engine
+            if start > 0:
+                self._add_ellipsis(f"‹{start}")
+            for c in shown:
+                lbl = Gtk.Label(label=eng._symbol_for_col(c))
+                ctx = lbl.get_style_context()
+                ctx.add_class("alttab-col")
+                for flag, cls in (("is_focused", "focused"), ("is_visible", "visible"), ("has_custom", "custom")):
+                    if c[flag]:
+                        ctx.add_class(cls)
+                self.strip_box.pack_start(lbl, False, False, 0)
+            if start + n < len(cols):
+                self._add_ellipsis(f"{len(cols) - start - n}›")
+
+        def _add_ellipsis(self, text: str) -> None:
+            lbl = Gtk.Label(label=text)
+            lbl.get_style_context().add_class("alttab-col")
+            lbl.get_style_context().add_class("ellipsis")
+            self.strip_box.pack_start(lbl, False, False, 0)
+
+        def _location_text(self, w: dict) -> str:
+            ws = self.ctl.workspaces.get(w.get("workspace_id")) or {}
+            ws_txt = ws.get("name") or tr("alttab_workspace", idx=ws.get("idx", "?"))
+            out = ws.get("output") or ""
+            return f"{ws_txt} · {out}" if out else ws_txt
+
+        @staticmethod
+        def _app_icon(app_id: str) -> Gtk.Image:
+            icon = None
+            for cand in (app_id, app_id.lower()):
+                try:
+                    info = DesktopAppInfo.new(f"{cand}.desktop")
+                except TypeError:
+                    info = None
+                if info and info.get_icon():
+                    icon = info.get_icon()
+                    break
+            if icon is not None:
+                img = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.LARGE_TOOLBAR)
+            else:
+                img = Gtk.Image.new_from_icon_name(app_id.lower() or "application-x-executable",
+                                                   Gtk.IconSize.LARGE_TOOLBAR)
+            img.set_pixel_size(24)
+            return img
+
+        def _render_rows(self, names: dict[str, str]) -> None:
+            self._clear(self.list_box)
+            n = len(self.order)
+            rows = min(self.MAX_ROWS, n)
+            start = max(0, min(n - rows, self.sel - rows // 2))
+            for idx in range(start, start + rows):
+                w = self.ctl.windows[self.order[idx]]
+                title, is_custom = self.ctl._format_label_for_window(w, names)
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+                row.get_style_context().add_class("alttab-row")
+                if idx == self.sel:
+                    row.get_style_context().add_class("selected")
+                t = Gtk.Label(label=("🏷️ " if is_custom else "") + title, xalign=0.0)
+                t.set_ellipsize(3)
+                t.get_style_context().add_class("alttab-row-title")
+                if is_custom:
+                    t.get_style_context().add_class("custom-named")
+                pos = (w.get("layout") or {}).get("pos_in_scrolling_layout")
+                col_txt = f"col {pos[0]}" if pos else "float"
+                meta = Gtk.Label(label=f"{w.get('app_id') or ''}  ·  {self._location_text(w)}  ·  {col_txt}", xalign=1.0)
+                meta.get_style_context().add_class("alttab-row-meta")
+                row.pack_start(self._app_icon(w.get("app_id") or ""), False, False, 0)
+                row.pack_start(t, True, True, 0)
+                row.pack_end(meta, False, False, 0)
+                ev = Gtk.EventBox()
+                ev.add(row)
+                ev.connect("button-press-event", lambda *_a, i=idx: self._on_row_click(i))
+                self.list_box.pack_start(ev, False, False, 0)
+
+        def _render(self) -> None:
+            if self.win is None or not self.order:
+                return
+            names = load_custom_names()
+            w = self.ctl.windows[self.order[self.sel]]
+            title, is_custom = self.ctl._format_label_for_window(w, names)
+            self.header_lbl.set_text(self._location_text(w))
+            self.sel_lbl.set_text(("🏷️ " if is_custom else "") + title)
+            ctx = self.sel_lbl.get_style_context()
+            (ctx.add_class if is_custom else ctx.remove_class)("custom-named")
+            self._render_strip(w)
+            self._render_rows(names)
+            self.win.show_all()
+
     controller = BadgeController()
+    alttab = AltTabSwitcher(controller)
+    controller.alttab_active = lambda: alttab.active
+    signal.signal(SIG_ALTTAB_NEXT, lambda *_: GLib.idle_add(alttab.step, 1))
+    signal.signal(SIG_ALTTAB_PREV, lambda *_: GLib.idle_add(alttab.step, -1))
     signal.signal(
         signal.SIGUSR1, lambda *_: GLib.idle_add(controller.show_for_window, controller.focused_id, True)
     )
@@ -989,7 +1440,7 @@ def run_daemon() -> None:
         controller.windows[wid] = w
         controller.sync_window_pty_title(w, load_custom_names())
         if w.get("is_focused"):
-            w["focus_timestamp"] = {"secs": int(time.time()), "nanos": 0}
+            w["focus_timestamp"] = monotonic_timestamp()
             controller.focused_id = wid
             if prev_focused != wid:
                 GLib.idle_add(controller.show_for_window, wid)
@@ -1018,13 +1469,20 @@ def run_daemon() -> None:
             controller.forced_side.clear()
         controller.focused_id = wid
         if wid in controller.windows:
-            controller.windows[wid]["focus_timestamp"] = {"secs": int(time.time()), "nanos": 0}
+            controller.windows[wid]["focus_timestamp"] = monotonic_timestamp()
             ws_id = controller.windows[wid].get("workspace_id")
             if ws_id in controller.workspaces:
                 controller.workspaces[ws_id]["active_window_id"] = wid
         GLib.idle_add(controller.show_for_window, wid)
 
+    def on_focus_timestamp_changed(payload: dict) -> None:
+        wid = payload.get("id")
+        ts = payload.get("focus_timestamp")
+        if wid in controller.windows and ts:
+            controller.windows[wid]["focus_timestamp"] = ts
+
     event_handlers = {
+        "WindowFocusTimestampChanged": on_focus_timestamp_changed,
         "WorkspacesChanged": on_workspaces_changed,
         "WindowsChanged": on_windows_changed,
         "WindowOpenedOrChanged": on_window_opened_or_changed,
@@ -1086,6 +1544,9 @@ def main():
         "restart": lambda: sys.exit(cmd_restart()),
         "rename": lambda: sys.exit(cmd_rename(sys.argv[2:])),
         "switcher": lambda: sys.exit(cmd_switcher()),
+        "alt-tab": lambda: notify_daemon(
+            SIG_ALTTAB_PREV if "--reverse" in sys.argv[2:] else SIG_ALTTAB_NEXT
+        ),
         "peek": lambda: notify_daemon(signal.SIGUSR2),
         "show": lambda: notify_daemon(signal.SIGUSR1),
     }

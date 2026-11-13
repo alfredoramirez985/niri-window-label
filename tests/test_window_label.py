@@ -298,5 +298,22 @@ class TestAltTabTitles(unittest.TestCase):
         self.assertFalse(nwl.is_terminal_window({}))
 
 
+class TestAltTabOrder(unittest.TestCase):
+    def test_mru_focused_first_then_newest(self):
+        wins = {
+            1: {"id": 1, "focus_timestamp": {"secs": 10, "nanos": 0}},
+            2: {"id": 2, "focus_timestamp": {"secs": 30, "nanos": 0}},
+            3: {"id": 3, "focus_timestamp": {"secs": 20, "nanos": 5}},
+            4: {"id": 4},
+        }
+        self.assertEqual(nwl.mru_window_ids(wins, 1), [1, 2, 3, 4])
+        self.assertEqual(nwl.mru_window_ids(wins, None), [2, 3, 1, 4])
+
+    def test_monotonic_timestamp_shape(self):
+        ts = nwl.monotonic_timestamp()
+        self.assertLess(ts["nanos"], 1_000_000_000)
+        self.assertGreaterEqual(ts["secs"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
