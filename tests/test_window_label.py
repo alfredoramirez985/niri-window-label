@@ -283,5 +283,20 @@ class TestWindowLabelGeometryAndNaming(unittest.TestCase):
             self.assertEqual(plain, "◇  ▣   2/2")
 
 
+class TestAltTabTitles(unittest.TestCase):
+    def test_strip_removes_leftover_strip(self):
+        self.assertEqual(nwl.strip_minimap_from_title("🏷️ API   ⟪◇  ▣   2/2⟫"), "API")
+        self.assertEqual(nwl.strip_minimap_from_title("~ ⟪□ ▣ 2/2⟫"), "~")
+
+    def test_plain_title_untouched(self):
+        self.assertEqual(nwl.strip_minimap_from_title("vim ⟪x"), "vim ⟪x")
+
+    def test_only_terminals_are_retitled(self):
+        self.assertTrue(nwl.is_terminal_window({"app_id": "kitty"}))
+        self.assertTrue(nwl.is_terminal_window({"app_id": "Alacritty"}))
+        self.assertFalse(nwl.is_terminal_window({"app_id": "firefox"}))
+        self.assertFalse(nwl.is_terminal_window({}))
+
+
 if __name__ == "__main__":
     unittest.main()

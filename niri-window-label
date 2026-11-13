@@ -88,6 +88,16 @@ def truncate_text(text: str, max_len: int) -> str:
     return text[: max_len - 1].rstrip() + "…"
 
 
+def strip_minimap_from_title(raw_title: str) -> str:
+    """Remove any injected '🏷️ ' prefix and trailing '   ⟪...⟫' minimap strip from a window title."""
+    cleaned = raw_title.strip()
+    if "⟪" in cleaned and cleaned.endswith("⟫"):
+        cleaned = cleaned.rsplit("⟪", 1)[0].rstrip()
+    if cleaned.startswith("🏷️"):
+        cleaned = cleaned.lstrip("🏷️").strip()
+    return cleaned
+
+
 def load_custom_names() -> dict[str, str]:
     try:
         if NAMES_FILE.exists():
@@ -153,6 +163,19 @@ def get_project_folder_name(pid: int | None) -> str | None:
         if cwd and cwd not in (home, "/"):
             return Path(cwd).name
     return None
+
+
+TERMINAL_APP_IDS = {
+    "kitty", "alacritty", "foot", "footclient", "com.mitchellh.ghostty", "ghostty",
+    "org.wezfurlong.wezterm", "wezterm", "org.gnome.console", "org.gnome.terminal",
+    "org.kde.konsole", "konsole", "xterm", "st", "tilix", "com.raggesilver.blackbox",
+}
+
+
+def is_terminal_window(w: dict) -> bool:
+    """Only terminal emulators get OSC titles; writing to a non-terminal app's PTY would
+    hit whatever terminal launched it."""
+    return (w.get("app_id") or "").lower() in TERMINAL_APP_IDS
 
 
 def set_terminal_pty_title(pid: int | None, target_title: str) -> bool:
@@ -562,7 +585,7 @@ class LayoutStateEngine:
         if custom_name:
             return truncate_text(custom_name, 56), True
 
-        raw_title = (w.get("title") or w.get("app_id") or tr("untitled")).strip()
+        raw_title = strip_minimap_from_title(w.get("title") or w.get("app_id") or tr("untitled"))
         proj = project_override if project_override is not None else get_project_folder_name(w.get("pid"))
         if not proj or proj.lower() in raw_title.lower():
             return truncate_text(raw_title, 56), False
@@ -589,12 +612,6 @@ class LayoutStateEngine:
             return False
         self.forced_side[wid] = "left" if new_pos[0] < old_pos[0] else "right"
         return True
-
-
-def _sync_window_pty_title(w: dict, names: dict[str, str]) -> None:
-    cname = names.get(str(w.get("id")))
-    if cname and w.get("title") != f"🏷️ {cname}":
-        set_terminal_pty_title(w.get("pid"), f"🏷️ {cname}")
 
 
 def load_minimap_engine(custom_path: Path | None = None):
@@ -788,6 +805,26 @@ def run_daemon() -> None:
             )
             return self.minimap_engine.format_strip_markup(cols, min_columns=2)
 
+        def sync_window_pty_title(self, w: dict, names: dict[str, str]) -> None:
+            """Tag custom-named terminals with '🏷️ name'; strip any leftover '⟪…⟫' strip."""
+            if not is_terminal_window(w):
+                return
+            title = w.get("title") or ""
+            cname = names.get(str(w.get("id")))
+            if cname:
+                desired = f"🏷️ {cname}"
+            elif "⟪" in title and title.endswith("⟫"):
+                desired = strip_minimap_from_title(title)
+            else:
+                return
+            if title != desired:
+                set_terminal_pty_title(w.get("pid"), desired)
+
+        def sync_all_pty_titles(self, names: dict[str, str] | None = None) -> None:
+            active_names = names if names is not None else load_custom_names()
+            for w in list(self.windows.values()):
+                self.sync_window_pty_title(w, active_names)
+
         def _all_badge_windows(self):
             return itertools.chain.from_iterable(self.monitor_pools.values())
 
@@ -896,7 +933,10 @@ def run_daemon() -> None:
                 )
                 if 20.0 <= center_x <= (mon_w - 20.0):
                     title_text, is_custom = self._format_label_for_window(win, names)
-                    pool[slot_idx].show_badge(title_text, is_custom, center_x, top_y, mon_w, mon_h)
+                    minimap_markup = self._compute_minimap_markup(win, mon_w, mon_h, names)
+                    pool[slot_idx].show_badge(
+                        title_text, is_custom, center_x, top_y, mon_w, mon_h, minimap_markup
+                    )
                     slot_idx += 1
 
         def peek_all_visible(self):
@@ -932,11 +972,10 @@ def run_daemon() -> None:
         w_list = payload.get("windows", [])
         controller.windows = {w["id"]: w for w in w_list}
         controller.workspace_view_x.clear()
-        names = load_custom_names()
         for w in w_list:
             if w.get("is_focused"):
                 controller.focused_id = w["id"]
-            _sync_window_pty_title(w, names)
+        controller.sync_all_pty_titles()
         if not initial_state["done"]:
             initial_state["done"] = True
             GLib.idle_add(controller.show_for_window, controller.focused_id)
@@ -948,7 +987,7 @@ def run_daemon() -> None:
             return
         prev_focused = controller.focused_id
         controller.windows[wid] = w
-        _sync_window_pty_title(w, load_custom_names())
+        controller.sync_window_pty_title(w, load_custom_names())
         if w.get("is_focused"):
             w["focus_timestamp"] = {"secs": int(time.time()), "nanos": 0}
             controller.focused_id = wid
