@@ -21,6 +21,7 @@ When working with many columns in niri's scrollable strip (especially multiple t
 - `python3` + `python-gobject` (`PyGObject`) + `python-cairo`
 - `gtk3` + `gtk-layer-shell`
 - *(Optional)* `rofi` (for `niri-window-label switcher`)
+- *(Optional)* [`niri-minimap`](https://github.com/alfredoramirez985/niri-minimap): draws the column strip in the `Alt + Tab` switcher and the peek badges. Without it everything else works, just without the strip. It is picked up automatically from `~/.local/bin/niri-minimap`, from next to `niri-window-label`, or from `$NIRI_MINIMAP_PATH`.
 
 On **Arch Linux / CachyOS**:
 ```bash
@@ -154,6 +155,7 @@ Identificador minimalista de ventanas y renombrador para el compositor Wayland *
 - **Integración con HyDE:** copia `hyde/niri-window-label.dcol` a `~/.config/hyde/wallbash/always/` y cada cambio de tema o fondo genera `~/.config/niri/window-label.theme.css` con los colores del tema. Tu `window-label.css` se carga después y siempre gana.
 - **Nombres de monitores:** Opcional, en `~/.config/niri/monitor-names.json` (por ejemplo `{ "LVDS-1": "Principal", "VGA-1": "Lateral" }`).
 - **Sincronización de títulos de terminales:** Actualiza automáticamente el título de tus terminales con tu nombre personalizado.
+- **Dependencia opcional:** la cinta de columnas del `Alt + Tab` y del modo peek la dibuja [`niri-minimap`](https://github.com/alfredoramirez985/niri-minimap). Si no está instalado (en `~/.local/bin/niri-minimap`), todo lo demás funciona igual, solo sin la cinta.
 
 ## 📄 License
 
