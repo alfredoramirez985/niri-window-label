@@ -1,38 +1,100 @@
 /*
  * Optional custom stylesheet for niri-window-label.
  * Copy to: ~/.config/niri/window-label.css
- * Then run: niri-window-label restart
+ *
+ * This file is appended AFTER the built-in stylesheet, so you only need to
+ * write what you want to change. To see every default rule:
+ *     niri-window-label css
+ *
+ * Alt+Tab picks up changes on its next opening (no restart needed).
+ * Badges pick them up with: niri-window-label restart
  */
 
-/* Default floating pill (automatic title / project folder) */
+/* ==== 1. Palette (easiest way to match your theme) =====================
+ * Redefine any of these; every rule below uses them, including derived
+ * colors like the selected-row background.
+ */
+@define-color nwl_bg           rgba(18, 20, 32, 0.96);  /* panel background        */
+@define-color nwl_border       rgba(122, 162, 247, 0.90); /* panel / badge border  */
+@define-color nwl_accent       #7aa2f7;  /* header, active monitor, selected row  */
+@define-color nwl_focus        #7dcfff;  /* selected column in the strip, counter */
+@define-color nwl_text         #c0caf5;  /* main text, visible columns           */
+@define-color nwl_text_dim     #a9b1d6;  /* unselected rows                       */
+@define-color nwl_text_bright  #ffffff;  /* selected row, active monitor number   */
+@define-color nwl_muted        #565f89;  /* off-screen columns, meta text, hints  */
+@define-color nwl_custom       #e0af68;  /* windows renamed with Super + N        */
+@define-color nwl_custom_focus #ff9e64;  /* selected column that has a custom name */
+@define-color nwl_selected_bg  alpha(@nwl_accent, 0.22);
+@define-color nwl_monitor_bg   alpha(@nwl_muted, 0.20);
+@define-color nwl_monitor_on   alpha(@nwl_accent, 0.30);
+
+/* Example: Catppuccin Mocha
+@define-color nwl_bg           rgba(30, 30, 46, 0.96);
+@define-color nwl_border       #cba6f7;
+@define-color nwl_accent       #cba6f7;
+@define-color nwl_focus        #89dceb;
+@define-color nwl_text         #cdd6f4;
+@define-color nwl_text_dim     #bac2de;
+@define-color nwl_muted        #6c7086;
+@define-color nwl_custom       #f9e2af;
+@define-color nwl_custom_focus #fab387;
+*/
+
+/* ==== 2. Focus badge (pill over the active window) ===================== */
+
+/* Default pill (automatic title / project folder) */
 .badge-box {
-    background-color: rgba(18, 20, 32, 0.94);
-    border: 2px solid rgba(122, 162, 247, 0.90);
     border-radius: 12px;
     padding: 8px 20px;
 }
 
-/* Floating pill when the window has a custom name (Super + N) */
-.badge-box.custom-named {
-    border-color: rgba(224, 175, 104, 0.98);
-    background-color: rgba(24, 24, 38, 0.96);
+/* Pill when the window has a custom name (Super + N) */
+.badge-box.custom-named { }
+
+/* Title text, and title text of a custom-named window */
+.title-label { font-size: 16px; }
+.title-label.custom-named { font-size: 18px; }
+
+/* ==== 3. Alt+Tab switcher ============================================== */
+
+/* Outer panel */
+.alttab-box {
+    border-radius: 16px;
+    padding: 16px 22px;
 }
 
-/* Default title text */
-.title-label {
-    color: #c0caf5;
-    font-size: 16px;
-    font-weight: 800;
-}
+/* Header: monitor name in bold ("HP P204  ·") and the workspace */
+.alttab-monitor-name { font-size: 14px; }
+.alttab-header { font-size: 14px; }
 
-/* Title text when the window has a custom name */
-.title-label.custom-named {
-    color: #e0af68;
-    font-size: 18px;
-    font-weight: 900;
-}
+/* Monitor mini-map: one box per monitor, numbered left to right.
+ * .active = the monitor where the selected window lives. */
+.alttab-mon { border-radius: 5px; }
+.alttab-mon.active { }
 
-/* Rename popup dialog (Super + N) */
+/* "7/10" column counter (top right) */
+.alttab-counter { }
+
+/* Master strip: one .alttab-col per column of the selected window's workspace.
+ * Extra classes: .visible (on screen), .custom (has a renamed window),
+ * .focused (the selected window's column), .ellipsis (the "‹3" / "2›" markers). */
+.alttab-col { font-size: 30px; }
+.alttab-col.focused { border-bottom: 3px solid @nwl_focus; }
+
+/* Big name of the selected window, under the strip */
+.alttab-selected { font-size: 20px; }
+
+/* Window list: .alttab-row (+ .selected), its title, monitor number and meta text */
+.alttab-row { border-radius: 10px; }
+.alttab-row.selected { box-shadow: inset 3px 0 0 @nwl_accent; }
+.alttab-row-title { font-size: 14px; }
+.alttab-row-monitor { }
+.alttab-row-meta { font-size: 12px; }
+
+/* Key hint at the bottom */
+.alttab-hint { }
+
+/* ==== 4. Rename popup (Super + N) ====================================== */
 .rename-box {
     background-color: rgba(20, 22, 35, 0.97);
     border: 2px solid #e0af68;
